@@ -5,6 +5,7 @@ go 1.25.0
 toolchain go1.25.12
 
 require (
+	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/itchyny/gojq v0.12.17
 	golang.org/x/sys v0.34.0
 	gopkg.in/yaml.v3 v3.0.1

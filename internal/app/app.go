@@ -13,17 +13,22 @@ import (
 	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/authn"
 	"github.com/gopact-ai/9a/internal/authz"
+	"github.com/gopact-ai/9a/internal/buildinfo"
+	"github.com/gopact-ai/9a/internal/builtin"
 	"github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/catalog"
 	"github.com/gopact-ai/9a/internal/declarative"
 	"github.com/gopact-ai/9a/internal/generator"
-	"github.com/gopact-ai/9a/internal/mount/dir"
+	"github.com/gopact-ai/9a/internal/mount"
+	fusemount "github.com/gopact-ai/9a/internal/mount/fuse"
+	"github.com/gopact-ai/9a/internal/projection"
 	"github.com/gopact-ai/9a/internal/provider"
 	"github.com/gopact-ai/9a/internal/provider/a2a"
 	"github.com/gopact-ai/9a/internal/provider/executable"
 	"github.com/gopact-ai/9a/internal/provider/mcp"
 	"github.com/gopact-ai/9a/internal/search"
+	"github.com/gopact-ai/9a/internal/workspace"
 )
 
 var ErrRestoreRequiresFreshApp = errors.New("restore requires a fresh app")
@@ -78,13 +83,18 @@ type App struct {
 	callErrorOrder              []string
 	callErrorNext               int
 	cancelBeforeRuntimeSnapshot func()
+	projections                 *projection.Manager
 }
 
 func New(db *sql.DB) *App {
 	az := authz.New(db)
 	idle := make(chan struct{})
 	close(idle)
-	return &App{db: db, cat: catalog.New(db), az: az, authn: authn.New(db), search: search.New(db, az), leases: map[*operationLease]struct{}{}, idle: idle, closeDone: make(chan struct{}), providers: map[string]provider.Provider{}, adapters: builtInAdapters(), adapterDB: adapterreg.NewRepository(db), callDB: call.NewRepository(db), activeCalls: map[string]*callRuntime{}, callErrors: map[string]error{}}
+	builtinSkill, err := builtin.UsingNineA(buildinfo.Version)
+	if err != nil {
+		panic(err)
+	}
+	return &App{db: db, cat: catalog.New(db), az: az, authn: authn.New(db), search: search.New(db, az), leases: map[*operationLease]struct{}{}, idle: idle, closeDone: make(chan struct{}), providers: map[string]provider.Provider{}, adapters: builtInAdapters(), adapterDB: adapterreg.NewRepository(db), callDB: call.NewRepository(db), activeCalls: map[string]*callRuntime{}, callErrors: map[string]error{}, projections: projection.New(db, builtinSkill, fusemount.New())}
 }
 
 func builtInAdapters() map[string]provider.Adapter {
@@ -273,7 +283,7 @@ func (a *App) Restore(ctx context.Context) error {
 	a.adapters = adapters
 	a.providers = restoredProviders
 	a.mu.Unlock()
-	return nil
+	return a.restoreManagedViews(lease.ctx)
 }
 
 func (a *App) AddAdapter(ctx context.Context, protocol, path string) error {
@@ -328,6 +338,53 @@ func (a *App) AddProvider(ctx context.Context, p provider.Provider) error {
 	return a.addProviderLocked(lease, p)
 }
 
+func (a *App) RemoveProvider(ctx context.Context, identity, protocol, name string) error {
+	if !a.IsAdmin(ctx, identity) {
+		return errors.New("admin permission required")
+	}
+	if protocol == "api" {
+		return errors.New("use 9a remove for declarative providers")
+	}
+	lease, err := a.beginOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.done()
+	a.mutation.Lock()
+	defer a.mutation.Unlock()
+	id := protocol + "/" + name
+	a.mu.RLock()
+	p, ok := a.providers[id]
+	ad := a.adapters[protocol]
+	a.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("provider %q not found", id)
+	}
+	capabilities, err := catalog.New(a.db).ListCapabilities(lease.ctx)
+	if err != nil {
+		return err
+	}
+	if ad != nil {
+		if err = ad.Close(lease.ctx, p); err != nil {
+			return err
+		}
+	}
+	for _, c := range capabilities {
+		if c.Source.Protocol == protocol && c.Source.Provider == name {
+			if err = a.projections.RemoveBySource(lease.ctx, "capability", c.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if err = catalog.New(a.db).DeleteProvider(lease.ctx, id); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	delete(a.providers, id)
+	a.mu.Unlock()
+	return nil
+}
+
 func (a *App) addProviderLocked(lease *operationLease, p provider.Provider) error {
 	expectedID := p.Protocol + "/" + p.Name
 	if p.ID != expectedID {
@@ -367,7 +424,7 @@ func (a *App) Grant(ctx context.Context, identity, capID string, permissions []s
 func (a *App) Search(ctx context.Context, identity string, q search.Query) ([]search.Result, error) {
 	return a.search.Search(ctx, identity, q)
 }
-func (a *App) Project(ctx context.Context, identity, id, root string) error {
+func (a *App) Project(ctx context.Context, identity, id, workspaceRoot, root string) error {
 	if !a.az.Allowed(ctx, identity, id, authz.Read) {
 		return errors.New("permission_denied")
 	}
@@ -379,7 +436,15 @@ func (a *App) Project(ctx context.Context, identity, id, root string) error {
 	if e != nil {
 		return e
 	}
-	return dir.New().Publish(ctx, root, s)
+	snapshot, e := mount.NewSnapshot(s.CapabilityID, s.Name, fmt.Sprintf("%d", s.Revision), s.Revision, s.Files)
+	if e != nil {
+		return e
+	}
+	if _, e = a.projections.Attach(ctx, workspaceRoot, workspace.PolicyAuto); e != nil {
+		return e
+	}
+	_, e = a.projections.Register(ctx, workspaceRoot, root, snapshot, "capability", id)
+	return e
 }
 
 type sink struct{ result json.RawMessage }
@@ -491,6 +556,9 @@ func (a *App) Close(ctx context.Context) error {
 	}
 	sort.Strings(ids)
 	var errs []error
+	if err := a.projections.Close(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("close projections: %w", err))
+	}
 	for _, id := range ids {
 		session := sessionsByID[id]
 		if session.adapter == nil {

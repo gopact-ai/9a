@@ -13,7 +13,7 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	for _, table := range []string{"external_adapters", "providers", "capabilities", "capability_fts", "acl", "projections", "calls", "call_inputs", "call_results", "call_event_usage", "call_storage_usage", "events", "usage"} {
+	for _, table := range []string{"external_adapters", "providers", "capabilities", "capability_fts", "acl", "workspaces", "managed_skills", "calls", "call_inputs", "call_results", "call_event_usage", "call_storage_usage", "events", "usage"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE name = ?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing %s: %v", table, err)

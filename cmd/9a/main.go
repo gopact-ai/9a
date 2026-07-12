@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"github.com/gopact-ai/9a/internal/api"
 	callmodel "github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/declarative"
+	workspacepkg "github.com/gopact-ai/9a/internal/workspace"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,6 +88,58 @@ func declarativeRemoveRequest(args []string) (api.Request, error) {
 }
 
 func fail(v ...any) { fmt.Fprintln(os.Stderr, v...); os.Exit(1) }
+
+func workspaceCommandRequest(args []string, cwd string) (api.Request, error) {
+	if len(args) == 0 {
+		return api.Request{}, fmt.Errorf("usage: 9a <attach|status|update|detach> [--workspace <path>] [--backend <auto|fuse|directory>]")
+	}
+	command := args[0]
+	if command != "attach" && command != "status" && command != "update" && command != "detach" {
+		return api.Request{}, fmt.Errorf("unknown workspace command")
+	}
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	explicit := flags.String("workspace", "", "")
+	backend := flags.String("backend", "auto", "")
+	_ = flags.Bool("json", false, "")
+	check := flags.Bool("check", false, "")
+	all := flags.Bool("all", false, "")
+	if err := flags.Parse(args[1:]); err != nil {
+		return api.Request{}, err
+	}
+	if flags.NArg() != 0 {
+		return api.Request{}, fmt.Errorf("unexpected arguments")
+	}
+	if command != "attach" && *backend != "auto" {
+		return api.Request{}, fmt.Errorf("--backend is only valid with attach")
+	}
+	root, err := workspacepkg.Resolve(*explicit, cwd)
+	if err != nil {
+		return api.Request{}, err
+	}
+	action := map[string]string{"attach": "workspace.attach", "status": "workspace.status", "update": "workspace.update", "detach": "workspace.detach"}[command]
+	if command != "update" && (*check || *all) {
+		return api.Request{}, fmt.Errorf("--check and --all are only valid with update")
+	}
+	return api.Request{Action: action, Root: root, Backend: *backend, Check: *check, All: *all}, nil
+}
+
+func autoAttach(command string) bool {
+	switch command {
+	case "search", "project", "add", "providers", "adapters", "update":
+		return true
+	}
+	return false
+}
+
+func workspaceForProjectionRoot(root string) string {
+	clean := filepath.Clean(root)
+	parent := filepath.Dir(clean)
+	if filepath.Base(clean) == "skills" && (filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".claude") {
+		return filepath.Dir(parent)
+	}
+	return parent
+}
 
 func adapterAddRequest(args []string) (api.Request, error) {
 	if len(args) != 4 || args[1] != "add" {
@@ -193,6 +248,10 @@ func call(q api.Request) json.RawMessage {
 		fail(e)
 	}
 	if resp.StatusCode >= 300 || out.Error != "" {
+		if len(out.Data) > 0 && string(out.Data) != "null" {
+			_, _ = os.Stderr.Write(out.Data)
+			_, _ = os.Stderr.Write([]byte("\n"))
+		}
 		fail(out.Code + ": " + out.Error)
 	}
 	return out.Data
@@ -204,7 +263,25 @@ func main() {
 	}
 	var q api.Request
 	plainString := false
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		fail(cwdErr)
+	}
+	skipAttach := (a[0] == "update" && (slices.Contains(a, "--check") || slices.Contains(a, "--all"))) || (a[0] == "providers" && len(a) > 1 && a[1] == "remove")
+	if autoAttach(a[0]) && !skipAttach && os.Getenv("NINEA_AUTO_ATTACH") != "0" {
+		root, err := workspacepkg.Resolve("", cwd)
+		if err != nil {
+			fail(err)
+		}
+		_ = call(api.Request{Action: "workspace.attach", Root: root, Backend: "auto"})
+	}
 	switch a[0] {
+	case "attach", "status", "update", "detach":
+		request, err := workspaceCommandRequest(a, cwd)
+		if err != nil {
+			fail(err)
+		}
+		q = request
 	case "validate":
 		if len(a) != 2 {
 			fail("usage: 9a validate <source.yaml>")
@@ -218,10 +295,6 @@ func main() {
 		}
 		return
 	case "add", "diff":
-		cwd, err := os.Getwd()
-		if err != nil {
-			fail(err)
-		}
 		request, err := declarativeFileRequest(a, cwd)
 		if err != nil {
 			fail(err)
@@ -247,8 +320,12 @@ func main() {
 		}
 		q = request
 	case "providers":
+		if len(a) == 4 && a[1] == "remove" {
+			q = api.Request{Action: "provider.remove", Protocol: a[2], Name: a[3]}
+			break
+		}
 		if len(a) != 5 || a[1] != "add" {
-			fail("usage: providers add <protocol> <name> <endpoint>")
+			fail("usage: providers <add <protocol> <name> <endpoint>|remove <protocol> <name>>")
 		}
 		q = api.Request{Action: "provider.add", Protocol: a[2], Name: a[3], Endpoint: a[4]}
 	case "acl":
@@ -271,7 +348,18 @@ func main() {
 		if len(a) != 4 || a[1] != "add" {
 			fail("usage: project add <capability> <root>")
 		}
-		q = api.Request{Action: "project.add", Capability: a[2], Root: a[3]}
+		root, err := filepath.Abs(a[3])
+		if err != nil {
+			fail(err)
+		}
+		workspaceRoot, err := workspacepkg.Resolve("", cwd)
+		if err != nil {
+			fail(err)
+		}
+		if os.Getenv("NINEA_AUTO_ATTACH") == "0" {
+			workspaceRoot = workspaceForProjectionRoot(root)
+		}
+		q = api.Request{Action: "project.add", Capability: a[2], Workspace: workspaceRoot, Root: root}
 	case "invoke":
 		request, err := invokeRequest(a, os.Stdin)
 		if err != nil {
