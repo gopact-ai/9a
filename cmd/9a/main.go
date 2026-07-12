@@ -258,7 +258,7 @@ func main() {
 	if cwdErr != nil {
 		fail(cwdErr)
 	}
-	skipAttach := a[0] == "update" && (slices.Contains(a, "--check") || slices.Contains(a, "--all"))
+	skipAttach := (a[0] == "update" && (slices.Contains(a, "--check") || slices.Contains(a, "--all"))) || (a[0] == "providers" && len(a) > 1 && a[1] == "remove")
 	if autoAttach(a[0]) && !skipAttach && os.Getenv("NINEA_AUTO_ATTACH") != "0" {
 		root, err := workspacepkg.Resolve("", cwd)
 		if err != nil {

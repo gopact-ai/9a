@@ -54,6 +54,10 @@ func TestManagedSkillAutomaticAttachRepairAndDetach(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("tampered"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	status := runInDir(t, workspace, env, cli, "", "status", "--json")
+	if !bytes.Contains(status, []byte(`"state":"tampered"`)) || !bytes.Contains(status, []byte(`"mount_state":"tampered"`)) {
+		t.Fatalf("tampered status=%s", status)
+	}
 	runInDir(t, workspace, env, cli, "", "update")
 	data, err := os.ReadFile(filepath.Join(skill, "SKILL.md"))
 	if err != nil || !bytes.Contains(data, []byte("# Using NineA")) {
@@ -62,6 +66,10 @@ func TestManagedSkillAutomaticAttachRepairAndDetach(t *testing.T) {
 	runInDir(t, workspace, env, cli, "", "detach")
 	if _, err = os.Stat(skill); !os.IsNotExist(err) {
 		t.Fatalf("skill remains: %v", err)
+	}
+	status = runInDir(t, workspace, env, cli, "", "status", "--json")
+	if !bytes.Contains(status, []byte(`"state":"detached"`)) {
+		t.Fatalf("detached status=%s", status)
 	}
 	if err = process.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)

@@ -16,6 +16,7 @@ const (
 	StateFallback    State         = "fallback"
 	StateDegraded    State         = "degraded"
 	StateTampered    State         = "tampered"
+	StateDetached    State         = "detached"
 )
 
 type Workspace struct {

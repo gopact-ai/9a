@@ -197,6 +197,9 @@ func (m *Manager) Status(ctx context.Context, root string) (Status, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.repo.GetWorkspaceByRoot(ctx, filepath.Clean(root))
+	if errors.Is(err, workspace.ErrNotFound) {
+		return Status{Workspace: workspace.Workspace{Root: filepath.Clean(root), State: workspace.StateDetached}}, nil
+	}
 	if err != nil {
 		return Status{}, err
 	}
