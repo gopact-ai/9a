@@ -25,6 +25,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(id UNINDEXED, name,
 CREATE TABLE IF NOT EXISTS acl (identity_id TEXT NOT NULL, capability_id TEXT NOT NULL, permission TEXT NOT NULL, PRIMARY KEY(identity_id,capability_id,permission));
 CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, identity_id TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projections (target TEXT NOT NULL, capability_id TEXT NOT NULL, mode TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(target,capability_id));
+CREATE TABLE IF NOT EXISTS workspaces (
+ id TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE, skills_root TEXT NOT NULL,
+ policy TEXT NOT NULL, backend TEXT NOT NULL, state TEXT NOT NULL,
+ fallback_reason TEXT NOT NULL DEFAULT '', format INTEGER NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS managed_skills (
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ logical_id TEXT NOT NULL, target_name TEXT NOT NULL, source_kind TEXT NOT NULL,
+ source_id TEXT NOT NULL, catalog_revision INTEGER NOT NULL,
+ skill_version TEXT NOT NULL, digest TEXT NOT NULL, mount_state TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ PRIMARY KEY(workspace_id,logical_id), UNIQUE(workspace_id,target_name)
+);
 CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, capability_id TEXT NOT NULL, identity_id TEXT NOT NULL, state TEXT NOT NULL, code TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS call_inputs (call_id TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE, data_json BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS call_results (call_id TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE, data_json BLOB NOT NULL);
