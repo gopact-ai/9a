@@ -110,10 +110,11 @@ brew upgrade gopact-ai/tap/ninea
 ```
 
 After upgrading, restart `ninead` with the same state database and socket, then
-run `9a update --check` and `9a update` to refresh the built-in Skill and every
-managed workspace view. See [Upgrade NineA](docs/getting-started.md#upgrade-ninea)
-for the safe sequence and the distinction between a software upgrade and a
-workspace update.
+run `9a update --check` and `9a update` to refresh the built-in Skill and the
+current workspace's managed views. Use `9a update --all` only when every
+attached workspace should be reconciled. See
+[Upgrade NineA](docs/getting-started.md#upgrade-ninea) for the safe sequence and
+the distinction between a software upgrade and a workspace update.
 
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) provides archives
 and SHA-256 checksums for macOS and Linux on x86-64 and ARM64.

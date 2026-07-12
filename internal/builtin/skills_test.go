@@ -40,9 +40,12 @@ func TestUsingNineASkillBundle(t *testing.T) {
 	if !strings.Contains(skill, "name: using-ninea") || !strings.Contains(skill, "Use when an AI agent needs") {
 		t.Fatalf("invalid SKILL.md: %s", skill)
 	}
-	for _, text := range []string{"brew upgrade gopact-ai/tap/ninea", "9a update --check", "9a update"} {
+	for _, text := range []string{"brew upgrade gopact-ai/tap/ninea", "9a update --check"} {
 		if !strings.Contains(troubleshooting, text) {
 			t.Fatalf("troubleshooting reference does not contain %q: %s", text, troubleshooting)
 		}
+	}
+	if !strings.Contains(troubleshooting, "\n9a update\n") {
+		t.Fatalf("troubleshooting reference does not contain standalone 9a update command: %s", troubleshooting)
 	}
 }
