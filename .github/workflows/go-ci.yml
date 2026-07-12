@@ -36,6 +36,8 @@ jobs:
         run: GOFLAGS=-race make test
       - name: Build commands
         run: make build
+      - name: Check release contract
+        run: make test-release-check
       - name: Run end-to-end tests
         run: make test-e2e
       - name: Check known vulnerabilities

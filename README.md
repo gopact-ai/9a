@@ -26,6 +26,18 @@ locally, projects only the useful capabilities into its own Skill directory,
 then invokes them through a small generated script. The agent does not need an
 MCP client, an A2A client, API credentials, or a vendor-specific tool registry.
 
+## Install
+
+Homebrew installs the `9a` client and the `ninead` daemon on macOS or Linux:
+
+```sh
+brew install gopact-ai/tap/9a
+```
+
+Release archives and SHA-256 checksums are also available from
+[GitHub Releases](https://github.com/gopact-ai/9a/releases). NineA currently
+publishes binaries for macOS and Linux on x86-64 and ARM64.
+
 ## From capability to Skill
 
 ```sh
@@ -81,11 +93,11 @@ commands perform actions. See [Architecture and Plan 9](docs/architecture.md).
 
 ## Current boundaries
 
-NineA is a source-built alpha for local evaluation. It currently requires Unix
-domain sockets and does not provide provider sandboxing, HTTP MCP transport,
-streaming, multi-turn continuation, prebuilt binaries, or a stable
-compatibility guarantee. MCP servers and executable adapters are trusted local
-processes running with the daemon user's OS privileges.
+NineA is an alpha for local evaluation. It currently requires Unix domain
+sockets and does not provide provider sandboxing, HTTP MCP transport,
+streaming, multi-turn continuation, or a stable compatibility guarantee. MCP
+servers and executable adapters are trusted local processes running with the
+daemon user's OS privileges.
 
 ## Start here
 
