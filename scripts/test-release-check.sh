@@ -22,6 +22,10 @@ require_text() {
 
 require_file .goreleaser.yaml
 require_file .github/workflows/release.yml
+require_file .github/workflows/go-ci.yml
+require_file .gitignore
+require_file README.md
+require_file docs/zh-CN/README.md
 require_text .gitignore 'dist/'
 
 for text in \
