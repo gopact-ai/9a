@@ -29,7 +29,7 @@ require_docker
 
 run davidanson/markdownlint-cli2:v0.23.0 "**/*.md" "#.worktrees/**" "#.agents/**"
 run rhysd/actionlint:1.7.12
-run zricethezav/gitleaks:v8.30.1 detect --source . --no-git --config .gitleaks.toml --redact
+run zricethezav/gitleaks:v8.30.1 detect --source . --config .gitleaks.toml --redact
 
 files=()
 while IFS= read -r file; do
