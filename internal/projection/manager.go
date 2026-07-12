@@ -328,26 +328,40 @@ func (m *Manager) Inspect(ctx context.Context, w workspace.Workspace, item works
 	return m.inspectBackend(ctx, w, attachment(w, item), snapshot)
 }
 
-func (m *Manager) RestoreSnapshot(ctx context.Context, w workspace.Workspace, item workspace.ManagedSkill, snapshot mount.Snapshot) error {
+func (m *Manager) RestoreSnapshot(ctx context.Context, w workspace.Workspace, item workspace.ManagedSkill, snapshot mount.Snapshot) (workspace.Workspace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if w.Backend == workspace.BackendFUSE {
 		_, err := m.attachBackendAt(ctx, w, item.TargetRoot, snapshot)
-		return err
+		if err == nil {
+			return w, nil
+		}
+		if w.Policy != workspace.PolicyAuto {
+			return w, err
+		}
+		w.Backend = workspace.BackendDirectory
+		w.State = workspace.StateFallback
+		w.FallbackReason = "fuse restore failed: " + err.Error()
+		w.UpdatedAt = time.Now().UTC()
+		if putErr := m.repo.PutWorkspace(ctx, w); putErr != nil {
+			return w, errors.Join(err, putErr)
+		}
+		_, attachErr := m.directory.Attach(ctx, item.TargetRoot, w.ID, snapshot)
+		return w, attachErr
 	}
 	inspection, err := m.directory.Inspect(ctx, attachment(w, item), snapshot)
 	if err != nil {
-		return err
+		return w, err
 	}
 	if inspection.State == mount.InspectionHealthy {
-		return nil
+		return w, nil
 	}
 	if inspection.State == mount.InspectionMissing {
 		_, err = m.directory.Attach(ctx, item.TargetRoot, w.ID, snapshot)
-		return err
+		return w, err
 	}
 	_, err = m.directory.Update(ctx, attachment(w, item), snapshot)
-	return err
+	return w, err
 }
 
 func (m *Manager) RemoveBySource(ctx context.Context, kind, source string) error {

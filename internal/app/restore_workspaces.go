@@ -28,7 +28,8 @@ func (a *App) restoreManagedViews(ctx context.Context) error {
 					return e
 				}
 			}
-			if e = a.projections.RestoreSnapshot(ctx, w, item, snapshot); e != nil {
+			w, e = a.projections.RestoreSnapshot(ctx, w, item, snapshot)
+			if e != nil {
 				return e
 			}
 		}
