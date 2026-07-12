@@ -31,7 +31,7 @@ MCP client, an A2A client, API credentials, or a vendor-specific tool registry.
 Homebrew installs the `9a` client and the `ninead` daemon on macOS or Linux:
 
 ```sh
-brew install gopact-ai/tap/9a
+brew install gopact-ai/tap/ninea
 ```
 
 Release archives and SHA-256 checksums are also available from

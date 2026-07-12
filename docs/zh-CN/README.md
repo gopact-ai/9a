@@ -28,7 +28,7 @@ A2A client、API 凭证或厂商专用工具注册表。
 Homebrew 会在 macOS 或 Linux 上同时安装 `9a` client 和 `ninead` daemon：
 
 ```sh
-brew install gopact-ai/tap/9a
+brew install gopact-ai/tap/ninea
 ```
 
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) 同时提供发布归档和

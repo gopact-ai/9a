@@ -47,5 +47,5 @@ require_text .github/workflows/release.yml "- 'v*'"
 require_text .github/workflows/release.yml 'attestations: write'
 require_text .github/workflows/release.yml 'subject-checksums: ./dist/checksums.txt'
 require_text .github/workflows/go-ci.yml 'make test-release-check'
-require_text README.md 'brew install gopact-ai/tap/9a'
-require_text docs/zh-CN/README.md 'brew install gopact-ai/tap/9a'
+require_text README.md 'brew install gopact-ai/tap/ninea'
+require_text docs/zh-CN/README.md 'brew install gopact-ai/tap/ninea'
