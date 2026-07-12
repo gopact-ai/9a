@@ -1,7 +1,7 @@
 GO ?= go
 GO_PACKAGES ?= ./...
 
-.PHONY: check test test-e2e build docs-check docs-check-changed test-docs-check
+.PHONY: check test test-e2e build docs-check docs-check-changed test-docs-check test-release-check
 
 check:
 	@unformatted="$$(gofmt -l .)"; \
@@ -29,3 +29,6 @@ docs-check-changed:
 
 test-docs-check:
 	./scripts/test-docs-check.sh
+
+test-release-check:
+	./scripts/test-release-check.sh

@@ -1,0 +1,61 @@
+version: 2
+
+project_name: 9a
+
+builds:
+  - id: ninea-cli
+    main: ./cmd/9a
+    binary: 9a
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+
+  - id: ninea-daemon
+    main: ./cmd/ninead
+    binary: ninead
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+
+archives:
+  - id: ninea
+    ids:
+      - ninea-cli
+      - ninea-daemon
+    formats:
+      - tar.gz
+    name_template: >-
+      9a_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - '^Merge '
+
+release:
+  prerelease: auto
