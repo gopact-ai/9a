@@ -7,7 +7,7 @@ No adapter project, SDK, or generated client is required.
 
 ## Quick start
 
-Start `ninead` as described in [Getting Started](getting-started.md), then run:
+Start `ninead` as described in the [User Guide](getting-started.md), then run:
 
 ```sh
 9a validate examples/declarative/open-meteo.yaml
