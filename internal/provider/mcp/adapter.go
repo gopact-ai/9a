@@ -137,9 +137,11 @@ func startSession(ctx context.Context, p provider.Provider) (*session, error) {
 		return nil, err
 	}
 	if err := childOut.Close(); err != nil {
+		_ = in.Close()
 		_ = processgroup.Kill(cmd)
+		waitErr := cmd.Wait()
 		_ = out.Close()
-		return nil, err
+		return nil, errors.Join(err, waitErr)
 	}
 	s := &session{cmd: cmd, in: in, scan: bufio.NewScanner(out), out: out, done: make(chan struct{})}
 	s.scan.Buffer(make([]byte, 64<<10), maxResponseLineBytes)
