@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gopact-ai/9a/internal/capability"
+	"github.com/gopact-ai/9a/internal/processgroup"
 	"github.com/gopact-ai/9a/internal/provider"
 )
 
@@ -550,4 +551,70 @@ func TestMCPRejectsUnterminatedResponseAtEOFAndAcceptsCRLF(t *testing.T) {
 			t.Fatalf("CRLF capabilities=%d error=%v", len(caps), err)
 		}
 	})
+}
+
+func TestSessionScannerKeepsStdoutReadableAfterProcessExit(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	t.Setenv("NINEA_MCP_HELPER_UNTERMINATED", "1")
+	p := mcpTestProvider(mcpHelperExecutable(t))
+	s, err := startSession(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.stop(context.Background())
+	s.callMu.Lock()
+	defer s.callMu.Unlock()
+	if err := json.NewEncoder(s.in).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	<-s.done
+	if s.scan.Scan() {
+		t.Fatal("unterminated response unexpectedly produced a token")
+	}
+	if !errors.Is(s.scan.Err(), errUnterminatedMCPResponse) {
+		t.Fatalf("scanner error=%v", s.scan.Err())
+	}
+}
+
+func TestSessionReapsDescendantHoldingStdoutAfterProcessExit(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	t.Setenv("NINEA_MCP_HELPER_UNTERMINATED", "1")
+	t.Setenv("NINEA_MCP_HELPER_DESCENDANT", "1")
+	p := mcpTestProvider(mcpHelperExecutable(t))
+	s, err := startSession(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.stop(context.Background())
+	s.callMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			s.callMu.Unlock()
+		}
+	}()
+	if err := json.NewEncoder(s.in).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	<-s.done
+	result := make(chan error, 1)
+	go func() {
+		if s.scan.Scan() {
+			result <- errors.New("unterminated response unexpectedly produced a token")
+			return
+		}
+		result <- s.scan.Err()
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, errUnterminatedMCPResponse) {
+			t.Fatalf("scanner error=%v", err)
+		}
+	case <-time.After(time.Second):
+		_ = processgroup.Kill(s.cmd)
+		<-result
+		s.callMu.Unlock()
+		locked = false
+		t.Fatal("scanner remained blocked by inherited stdout")
+	}
 }

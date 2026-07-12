@@ -91,9 +91,12 @@ type session struct {
 	cmd      *exec.Cmd
 	in       io.WriteCloser
 	scan     *bufio.Scanner
+	out      io.Closer
 	next     int
 	stopOnce sync.Once
+	outClose sync.Once
 	done     chan struct{}
+	callMu   sync.Mutex
 	waitMu   sync.Mutex
 	waitErr  error
 	canceled atomic.Bool
@@ -121,22 +124,36 @@ func startSession(ctx context.Context, p provider.Provider) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := cmd.StdoutPipe()
+	out, childOut, err := os.Pipe()
 	if err != nil {
+		_ = in.Close()
 		return nil, err
 	}
+	cmd.Stdout = childOut
 	if err = cmd.Start(); err != nil {
+		_ = in.Close()
+		_ = out.Close()
+		_ = childOut.Close()
 		return nil, err
 	}
-	s := &session{cmd: cmd, in: in, scan: bufio.NewScanner(out), done: make(chan struct{})}
+	if err := childOut.Close(); err != nil {
+		_ = processgroup.Kill(cmd)
+		_ = out.Close()
+		return nil, err
+	}
+	s := &session{cmd: cmd, in: in, scan: bufio.NewScanner(out), out: out, done: make(chan struct{})}
 	s.scan.Buffer(make([]byte, 64<<10), maxResponseLineBytes)
 	s.scan.Split(splitTerminatedMCPResponseLine)
 	go func() {
 		err := cmd.Wait()
+		_ = processgroup.Kill(cmd)
 		s.waitMu.Lock()
 		s.waitErr = err
 		s.waitMu.Unlock()
 		close(s.done)
+		s.callMu.Lock()
+		s.outClose.Do(func() { _ = s.out.Close() })
+		s.callMu.Unlock()
 	}()
 	return s, nil
 }
@@ -260,6 +277,8 @@ func (s *session) call(method string, params any) (json.RawMessage, error) {
 	return s.callStarted(method, params, nil)
 }
 func (s *session) callStarted(method string, params any, started func() error) (json.RawMessage, error) {
+	s.callMu.Lock()
+	defer s.callMu.Unlock()
 	s.next++
 	if err := json.NewEncoder(s.in).Encode(map[string]any{"jsonrpc": "2.0", "id": s.next, "method": method, "params": params}); err != nil {
 		return nil, err
