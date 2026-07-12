@@ -33,8 +33,11 @@ type Status struct {
 	Skills    []workspace.ManagedSkill `json:"skills"`
 }
 type UpdateResult struct {
-	Updated, Unchanged, Repaired, Failed int    `json:"updated"`
-	Status                               Status `json:"status"`
+	Updated   int    `json:"updated"`
+	Unchanged int    `json:"unchanged"`
+	Repaired  int    `json:"repaired"`
+	Failed    int    `json:"failed"`
+	Status    Status `json:"status"`
 }
 
 type Manager struct {
@@ -317,6 +320,12 @@ func (m *Manager) UpdateBuiltin(ctx context.Context, root string) (UpdateResult,
 
 func (m *Manager) ListWorkspaces(ctx context.Context) ([]workspace.Workspace, error) {
 	return m.repo.ListWorkspaces(ctx)
+}
+
+func (m *Manager) Inspect(ctx context.Context, w workspace.Workspace, item workspace.ManagedSkill, snapshot mount.Snapshot) (mount.Inspection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inspectBackend(ctx, w, attachment(w, item), snapshot)
 }
 
 func (m *Manager) RestoreSnapshot(ctx context.Context, w workspace.Workspace, item workspace.ManagedSkill, snapshot mount.Snapshot) error {

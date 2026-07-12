@@ -328,6 +328,8 @@ those semantics are essential.
 | `9a add <file>` | Yes | Add or replace the source, Catalog entries, and owned Skill. |
 | `9a diff <file>` | Yes | Compare against the persisted source without changing it. |
 | `9a remove <name>` | Yes | Remove Catalog entries and the owned Skill directory. |
+| `9a update` | Yes | Rediscover providers and repair or upgrade every managed Skill in the workspace. |
+| `9a detach` | Yes | Remove the workspace view without deleting this persisted source. |
 
 `add` grants the administrator performing the import `read` and `invoke` for
 the generated capabilities. Create separate agent identities and grant only
@@ -338,10 +340,16 @@ AGENT_TOKEN="$(9a tokens create support-agent)"
 9a acl grant support-agent api/order-operations/customer-orders read,invoke
 ```
 
-The projected ownership marker prevents overwriting user-created directories.
+The projected ownership manifest prevents overwriting user-created directories
+and records modes and SHA-256 digests without duplicating file contents.
 If a source changes its projection target, a successful update removes the old
 owned projection. Source text and projection location are stored in SQLite and
 reloaded with the built-in API adapter after restart.
+
+Managed Skills are read-only. Change the original YAML and run `9a add` again.
+With FUSE, mutation is rejected by the filesystem. The directory fallback uses
+`0444`/`0555` modes, atomic replacement, integrity checks, and `9a update`
+repair; it is not a security boundary against the same OS account.
 
 ## Troubleshooting
 

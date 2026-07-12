@@ -10,6 +10,30 @@ Building from source requires Go 1.25.12 or newer. NineA currently requires a
 platform with Unix domain sockets. The examples below use `openssl` to generate
 a bootstrap token.
 
+## Let an agent learn NineA
+
+The first `search`, `project add`, `add`, `providers add`, `adapters add`, or
+`update` command in a workspace automatically attaches the built-in
+`.agents/skills/using-ninea` Skill. It contains concise operating instructions
+and offline references for declarative YAML, MCP, A2A, custom adapters, and
+troubleshooting.
+
+```sh
+9a search "capability the user needs"
+9a status --json
+```
+
+Workspace roots are resolved in the client: `--workspace` wins, then the
+enclosing Git worktree, then the current directory. Absolute canonical paths
+are sent to `ninead`, so the daemon's working directory never changes the
+projection destination.
+
+NineA uses FUSE when available (`/dev/fuse` on Linux or macFUSE on macOS) and
+falls back to integrity-checked read-only files. Select explicitly with
+`9a attach --backend fuse` or `--backend directory`. FUSE is the strict option;
+directory permissions do not protect against the same OS account deliberately
+changing its own files.
+
 ## Add a JSON API as a Skill
 
 After starting the daemon, run this from a project directory:
@@ -233,6 +257,11 @@ stop that leaves an active record persisted, restore completes that record as
 | `9a remove <skill-name>` | Remove a declarative source and its owned projection | `admin` |
 | `9a adapters add <protocol> <absolute-executable>` | Persistently register an executable adapter | `admin` |
 | `9a providers add <protocol> <name> <endpoint>` | Discover and persist a provider | `admin` |
+| `9a providers remove <protocol> <name>` | Remove a provider and its managed views | `admin` |
+| `9a attach [--backend auto\|fuse\|directory]` | Attach the built-in Skill and workspace view | authenticated identity |
+| `9a status [--json]` | Inspect backend, fallback, and managed Skills | authenticated identity |
+| `9a update [--check] [--all]` | Rediscover providers and reconcile managed views | `admin` |
+| `9a detach` | Remove only this workspace's managed view | authenticated identity |
 | `9a tokens create <identity>` | Create a bearer token for an identity | `admin` |
 | `9a acl grant <identity> <capability> <permissions>` | Grant comma-separated permissions | `admin` |
 | `9a search <query>` | Search visible capabilities as JSON | capability `read` |
@@ -255,6 +284,11 @@ stop that leaves an active record persisted, restore completes that record as
 - **Provider discovery failure:** confirm the endpoint, daemon-inherited
   provider credential, protocol version, and adapter diagnostics.
 - **Projection conflict:** NineA refuses to replace any path it does not own.
+- **FUSE fallback:** inspect `9a status --json`; enable the platform FUSE
+  runtime or require the portable directory backend explicitly.
+- **Tampered projection:** run `9a update`; edit the source YAML or provider,
+  never the generated Skill. Move a directory with a missing or corrupt
+  ownership manifest aside before updating; NineA will not delete it.
 - **Call cannot be canceled:** the capability may be non-cancelable, already
   terminal, or no longer active in this daemon process.
 - **`call_quota_exceeded: call quota exceeded`:** the identity or daemon has

@@ -13,6 +13,8 @@ to read-only managed files. `update` rediscovers providers, refreshes the
 Catalog, upgrades the built-in Skill, repairs valid owned directory
 projections, and removes stale views. `detach` removes only the current
 workspace view; it preserves providers, API sources, ACLs, and call history.
+Because update rediscovers providers and changes the shared Catalog, it requires
+an administrator token.
 
 Common checks:
 
@@ -22,7 +24,9 @@ Common checks:
 - Invocation denied: grant `invoke` separately.
 - FUSE fallback: inspect `9a status --json`; install/enable the platform FUSE
   runtime or explicitly use the directory backend.
-- Tampered projection: run `9a update`; do not edit the generated directory.
+- Changed content or modes: run `9a update`; do not edit the generated
+  directory. If the ownership manifest itself is missing or corrupt, move the
+  directory aside before updating so 9A never deletes ambiguous content.
 - Projection conflict: move the user-owned directory. 9A never overwrites it.
 - Missing provider credentials: restart `ninead` from an environment containing
   them; projected files never contain resolved secrets.

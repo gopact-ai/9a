@@ -117,11 +117,12 @@ func (b *Backend) Detach(ctx context.Context, a mount.Attachment) error {
 		b.mu.Unlock()
 		return nil
 	}
-	delete(b.active, a.Target)
-	b.mu.Unlock()
 	if active.attachment.WorkspaceID != a.WorkspaceID || active.attachment.LogicalID != a.LogicalID {
+		b.mu.Unlock()
 		return errors.New("fuse attachment identity mismatch")
 	}
+	delete(b.active, a.Target)
+	b.mu.Unlock()
 	if err := active.server.Unmount(); err != nil {
 		return err
 	}

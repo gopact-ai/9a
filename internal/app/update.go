@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 
+	"github.com/gopact-ai/9a/internal/buildinfo"
+	"github.com/gopact-ai/9a/internal/builtin"
+	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/catalog"
 	"github.com/gopact-ai/9a/internal/declarative"
 	"github.com/gopact-ai/9a/internal/generator"
@@ -32,7 +36,10 @@ type UpdateResult struct {
 	Failed     int               `json:"failed"`
 }
 
-func (a *App) UpdateWorkspaces(ctx context.Context, root string, check, all bool) (UpdateResult, error) {
+func (a *App) UpdateWorkspaces(ctx context.Context, identity, root string, check, all bool) (UpdateResult, error) {
+	if !a.IsAdmin(ctx, identity) {
+		return UpdateResult{}, errors.New("admin permission required")
+	}
 	lease, err := a.beginOperation(ctx)
 	if err != nil {
 		return UpdateResult{}, err
@@ -41,6 +48,17 @@ func (a *App) UpdateWorkspaces(ctx context.Context, root string, check, all bool
 	a.mutation.Lock()
 	defer a.mutation.Unlock()
 	result := UpdateResult{}
+	currentByProvider := map[string][]capability.Capability{}
+	if check {
+		current, loadErr := catalog.New(a.db).ListCapabilities(ctx)
+		if loadErr != nil {
+			return result, loadErr
+		}
+		for _, item := range current {
+			key := item.Source.Protocol + "/" + item.Source.Provider
+			currentByProvider[key] = append(currentByProvider[key], item)
+		}
+	}
 	a.mu.RLock()
 	ids := make([]string, 0, len(a.providers))
 	for id := range a.providers {
@@ -75,7 +93,10 @@ func (a *App) UpdateWorkspaces(ctx context.Context, root string, check, all bool
 		}
 		state := "updated"
 		if check {
-			state = "checked"
+			state = "unchanged"
+			if !sameCapabilities(currentByProvider[entry.p.ID], caps) {
+				state = "changed"
+			}
 		}
 		result.Providers = append(result.Providers, ProviderUpdate{ID: entry.p.ID, State: state})
 	}
@@ -101,7 +122,39 @@ func (a *App) UpdateWorkspaces(ctx context.Context, root string, check, all bool
 			continue
 		}
 		if check {
-			wr.Unchanged = len(status.Skills)
+			builtSnapshot, builtErr := builtin.UsingNineA(buildinfo.Version)
+			if builtErr != nil {
+				return result, builtErr
+			}
+			for _, item := range status.Skills {
+				snapshot := builtSnapshot
+				var inspectErr error
+				if item.SourceKind != "builtin" {
+					snapshot, inspectErr = a.snapshotForManaged(ctx, item.SourceKind, item.SourceID)
+				}
+				if errors.Is(inspectErr, catalog.ErrNotFound) {
+					wr.Removed++
+					continue
+				}
+				if inspectErr != nil {
+					wr.Failed++
+					result.Failed++
+					continue
+				}
+				inspection, inspectErr := a.projections.Inspect(ctx, status.Workspace, item, snapshot)
+				if inspectErr != nil {
+					wr.Failed++
+					result.Failed++
+					continue
+				}
+				if inspection.State != mount.InspectionHealthy {
+					wr.Repaired++
+				} else if item.Digest != snapshot.Digest {
+					wr.Updated++
+				} else {
+					wr.Unchanged++
+				}
+			}
 			result.Workspaces = append(result.Workspaces, wr)
 			continue
 		}
@@ -147,6 +200,21 @@ func (a *App) UpdateWorkspaces(ctx context.Context, root string, check, all bool
 		return result, fmt.Errorf("update completed with %d failures", result.Failed)
 	}
 	return result, nil
+}
+
+func sameCapabilities(left, right []capability.Capability) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	normalize := func(values []capability.Capability) []capability.Capability {
+		out := append([]capability.Capability(nil), values...)
+		for i := range out {
+			out[i].Revision = 0
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+		return out
+	}
+	return reflect.DeepEqual(normalize(left), normalize(right))
 }
 
 func (a *App) snapshotForManaged(ctx context.Context, kind, source string) (mount.Snapshot, error) {

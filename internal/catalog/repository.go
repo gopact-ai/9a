@@ -79,9 +79,6 @@ func (r *Repository) ReplaceProviderCapabilities(ctx context.Context, p provider
 		if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id=?`, id); err != nil {
 			return 0, err
 		}
-		if _, err = tx.ExecContext(ctx, `DELETE FROM projections WHERE capability_id=?`, id); err != nil {
-			return 0, err
-		}
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capabilities WHERE provider_id=?`, p.ID); err != nil {
 		return 0, err
@@ -181,9 +178,6 @@ func (r *Repository) DeleteProvider(ctx context.Context, providerID string) (err
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capability_fts WHERE id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM projections WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, providerID); err != nil {

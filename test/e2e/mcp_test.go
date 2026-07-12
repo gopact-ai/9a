@@ -178,6 +178,10 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 	if calls, err := os.ReadFile(counter); err != nil || strings.Count(string(calls), "call\n") != 1 {
 		t.Fatalf("provider calls=%q err=%v", calls, err)
 	}
+	run(t, adminEnv, cli, "", "providers", "remove", "mcp", "weather")
+	if _, err := os.Stat(skill); !os.IsNotExist(err) {
+		t.Fatalf("provider projection remains: %v", err)
+	}
 }
 
 func TestDaemonRejectsMissingToken(t *testing.T) {

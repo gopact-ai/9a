@@ -107,7 +107,7 @@ func Listen(socket string, a *app.App) (*Server, error) {
 		case "workspace.status":
 			data, err = a.WorkspaceStatus(ctx, q.Root)
 		case "workspace.update":
-			data, err = a.UpdateWorkspaces(ctx, q.Root, q.Check, q.All)
+			data, err = a.UpdateWorkspaces(ctx, identity, q.Root, q.Check, q.All)
 		case "workspace.detach":
 			err = a.DetachWorkspace(ctx, q.Root)
 		case "provider.add":
@@ -171,6 +171,11 @@ func Listen(socket string, a *app.App) (*Server, error) {
 			err = &actionError{}
 		}
 		if err != nil {
+			if q.Action == "workspace.update" {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(Response{Data: data, Error: err.Error(), Code: "update_failed"})
+				return
+			}
 			if q.Action == "adapter.add" {
 				if errors.Is(err, adapterreg.ErrDuplicate) {
 					writeError(w, http.StatusBadRequest, "adapter_exists", errors.New("adapter already registered"))

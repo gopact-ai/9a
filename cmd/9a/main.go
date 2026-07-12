@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -238,6 +239,10 @@ func call(q api.Request) json.RawMessage {
 		fail(e)
 	}
 	if resp.StatusCode >= 300 || out.Error != "" {
+		if len(out.Data) > 0 && string(out.Data) != "null" {
+			_, _ = os.Stderr.Write(out.Data)
+			_, _ = os.Stderr.Write([]byte("\n"))
+		}
 		fail(out.Code + ": " + out.Error)
 	}
 	return out.Data
@@ -253,7 +258,8 @@ func main() {
 	if cwdErr != nil {
 		fail(cwdErr)
 	}
-	if autoAttach(a[0]) && os.Getenv("NINEA_AUTO_ATTACH") != "0" {
+	skipAttach := a[0] == "update" && (slices.Contains(a, "--check") || slices.Contains(a, "--all"))
+	if autoAttach(a[0]) && !skipAttach && os.Getenv("NINEA_AUTO_ATTACH") != "0" {
 		root, err := workspacepkg.Resolve("", cwd)
 		if err != nil {
 			fail(err)

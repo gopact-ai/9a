@@ -13,6 +13,7 @@ import (
 	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/authn"
 	"github.com/gopact-ai/9a/internal/authz"
+	"github.com/gopact-ai/9a/internal/buildinfo"
 	"github.com/gopact-ai/9a/internal/builtin"
 	"github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/capability"
@@ -89,7 +90,7 @@ func New(db *sql.DB) *App {
 	az := authz.New(db)
 	idle := make(chan struct{})
 	close(idle)
-	builtinSkill, err := builtin.UsingNineA("dev")
+	builtinSkill, err := builtin.UsingNineA(buildinfo.Version)
 	if err != nil {
 		panic(err)
 	}

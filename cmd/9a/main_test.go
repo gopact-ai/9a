@@ -146,3 +146,31 @@ func TestInvokeRequestEnforcesSharedPayloadBound(t *testing.T) {
 		t.Fatalf("oversized invoke input error=%v", err)
 	}
 }
+
+func TestWorkspaceCommandRequests(t *testing.T) {
+	root := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		args            []string
+		action, backend string
+		check, all      bool
+	}{{[]string{"attach", "--backend", "directory"}, "workspace.attach", "directory", false, false}, {[]string{"status", "--json"}, "workspace.status", "auto", false, false}, {[]string{"update", "--check"}, "workspace.update", "auto", true, false}, {[]string{"update", "--all"}, "workspace.update", "auto", false, true}, {[]string{"detach"}, "workspace.detach", "auto", false, false}}
+	for _, test := range tests {
+		request, err := workspaceCommandRequest(test.args, root)
+		if err != nil {
+			t.Fatalf("%v: %v", test.args, err)
+		}
+		if request.Action != test.action || request.Root != canonical || request.Backend != test.backend || request.Check != test.check || request.All != test.all {
+			t.Fatalf("%v: %#v", test.args, request)
+		}
+	}
+	if _, err := workspaceCommandRequest([]string{"status", "--backend", "fuse"}, root); err == nil {
+		t.Fatal("status accepted backend")
+	}
+	if _, err := workspaceCommandRequest([]string{"detach", "--check"}, root); err == nil {
+		t.Fatal("detach accepted check")
+	}
+}

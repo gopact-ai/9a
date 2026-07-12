@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS capabilities (
 CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(id UNINDEXED, name, description, tags, examples);
 CREATE TABLE IF NOT EXISTS acl (identity_id TEXT NOT NULL, capability_id TEXT NOT NULL, permission TEXT NOT NULL, PRIMARY KEY(identity_id,capability_id,permission));
 CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, identity_id TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS projections (target TEXT NOT NULL, capability_id TEXT NOT NULL, mode TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(target,capability_id));
+DROP TABLE IF EXISTS projections;
 CREATE TABLE IF NOT EXISTS workspaces (
  id TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE, skills_root TEXT NOT NULL,
  policy TEXT NOT NULL, backend TEXT NOT NULL, state TEXT NOT NULL,

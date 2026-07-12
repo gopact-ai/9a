@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/gopact-ai/9a/internal/buildinfo"
 	"github.com/gopact-ai/9a/internal/builtin"
 )
 
@@ -10,7 +11,7 @@ func (a *App) restoreManagedViews(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	built, err := builtin.UsingNineA("dev")
+	built, err := builtin.UsingNineA(buildinfo.Version)
 	if err != nil {
 		return err
 	}
