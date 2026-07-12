@@ -381,6 +381,8 @@ func (m *Manager) RestoreSnapshot(ctx context.Context, w workspace.Workspace, it
 }
 
 func (m *Manager) RemoveBySource(ctx context.Context, kind, source string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	workspaces, err := m.repo.ListWorkspaces(ctx)
 	if err != nil {
 		return err
@@ -392,7 +394,10 @@ func (m *Manager) RemoveBySource(ctx context.Context, kind, source string) error
 		}
 		for _, item := range items {
 			if item.SourceKind == kind && item.SourceID == source {
-				if e = m.Remove(ctx, w.Root, item.LogicalID); e != nil {
+				if e = m.detachBackend(ctx, w, attachment(w, item)); e != nil {
+					return e
+				}
+				if e = m.repo.DeleteManagedSkill(ctx, w.ID, item.LogicalID); e != nil {
 					return e
 				}
 			}

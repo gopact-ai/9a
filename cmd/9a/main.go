@@ -132,6 +132,15 @@ func autoAttach(command string) bool {
 	return false
 }
 
+func workspaceForProjectionRoot(root string) string {
+	clean := filepath.Clean(root)
+	parent := filepath.Dir(clean)
+	if filepath.Base(clean) == "skills" && (filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".claude") {
+		return filepath.Dir(parent)
+	}
+	return parent
+}
+
 func adapterAddRequest(args []string) (api.Request, error) {
 	if len(args) != 4 || args[1] != "add" {
 		return api.Request{}, fmt.Errorf("usage: 9a adapters add <protocol> <absolute-executable>")
@@ -348,7 +357,7 @@ func main() {
 			fail(err)
 		}
 		if os.Getenv("NINEA_AUTO_ATTACH") == "0" {
-			workspaceRoot = filepath.Dir(root)
+			workspaceRoot = workspaceForProjectionRoot(root)
 		}
 		q = api.Request{Action: "project.add", Capability: a[2], Workspace: workspaceRoot, Root: root}
 	case "invoke":

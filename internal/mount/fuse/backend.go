@@ -23,6 +23,9 @@ type activeMount struct {
 	snapshot   mount.Snapshot
 	attachment mount.Attachment
 }
+
+var ErrConflict = errors.New("fuse projection conflicts with existing path")
+
 type Backend struct {
 	mu     sync.Mutex
 	active map[string]*activeMount
@@ -51,9 +54,9 @@ func (b *Backend) Attach(ctx context.Context, root, workspaceID string, s mount.
 	if b.active[target] != nil {
 		return mount.Attachment{}, fmt.Errorf("mount already active: %s", target)
 	}
-	if entries, err := os.ReadDir(target); err == nil && len(entries) > 0 {
-		return mount.Attachment{}, fmt.Errorf("projection conflicts with non-empty directory")
-	} else if err != nil && !os.IsNotExist(err) {
+	if _, err := os.Lstat(target); err == nil {
+		return mount.Attachment{}, ErrConflict
+	} else if !os.IsNotExist(err) {
 		return mount.Attachment{}, err
 	}
 	if err := os.MkdirAll(target, 0o755); err != nil {

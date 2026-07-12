@@ -4,12 +4,26 @@ package fusemount
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/gopact-ai/9a/internal/mount"
 )
+
+func TestAttachRejectsExistingEmptyDirectory(t *testing.T) {
+	backend := New()
+	root := t.TempDir()
+	target := filepath.Join(root, "readonly")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := mount.NewSnapshot("test/readonly", "readonly", "v1", 1, nil)
+	if _, err := backend.Attach(context.Background(), root, "workspace", snapshot); !errors.Is(err, ErrConflict) {
+		t.Fatalf("error=%v want conflict", err)
+	}
+}
 
 func TestRequiredFUSERuntime(t *testing.T) {
 	if os.Getenv("NINEA_REQUIRE_FUSE") != "1" {

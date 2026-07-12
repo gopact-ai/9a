@@ -174,3 +174,12 @@ func TestWorkspaceCommandRequests(t *testing.T) {
 		t.Fatal("detach accepted check")
 	}
 }
+
+func TestWorkspaceForProjectionRoot(t *testing.T) {
+	tests := map[string]string{"/work/.agents/skills": "/work", "/work/.claude/skills": "/work", "/tmp/custom-skills": "/tmp"}
+	for root, want := range tests {
+		if got := workspaceForProjectionRoot(root); got != want {
+			t.Fatalf("workspaceForProjectionRoot(%q)=%q want %q", root, got, want)
+		}
+	}
+}
