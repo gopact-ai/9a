@@ -183,6 +183,9 @@ func (r *Repository) DeleteProvider(ctx context.Context, providerID string) (err
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capability_fts WHERE id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM projections WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, providerID); err != nil {
 		return err
 	}

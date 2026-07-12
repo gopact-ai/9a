@@ -97,15 +97,16 @@ func TestParseRejectsUnsafeOrAmbiguousYAML(t *testing.T) {
 
 func TestParseRejectsInvalidReferencesAndSecurity(t *testing.T) {
 	tests := map[string]string{
-		"undeclared variable":   strings.Replace(validSource, "{{ vars.client }}", "{{ vars.missing }}", 1),
-		"remote http":           strings.Replace(validSource, "https://api.open-meteo.com", "http://api.open-meteo.com", 1),
-		"exec disabled":         strings.Replace(validSource, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - exec:\n            command: [/bin/true]", 1),
-		"malformed template":    strings.Replace(validSource, "{{ input.latitude }}", "{{ input.latitude", 1),
-		"response header hook":  strings.Replace(validSource, "        - transform:\n            language: jq\n            expression: '{temperature: .body.current.temperature_2m}'", "        - setHeaders:\n            X-Late: invalid", 1),
-		"unbounded timeout":     strings.Replace(validSource, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - exec:\n            command: [/bin/true]\n            timeout: 2m", 1) + "security:\n  allowExecutableHooks: true\n",
-		"invalid jq":            strings.Replace(validSource, "'{temperature: .body.current.temperature_2m}'", "'{'", 1),
-		"invalid environment":   strings.Replace(validSource, "fromEnv: WEATHER_CLIENT", "fromEnv: 'BAD ENV'", 1),
-		"duplicate header case": strings.Replace(validSource, "        X-Client: \"{{ vars.client }}\"", "        X-Client: one\n        x-client: two", 1),
+		"undeclared variable":       strings.Replace(validSource, "{{ vars.client }}", "{{ vars.missing }}", 1),
+		"remote http":               strings.Replace(validSource, "https://api.open-meteo.com", "http://api.open-meteo.com", 1),
+		"exec disabled":             strings.Replace(validSource, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - exec:\n            command: [/bin/true]", 1),
+		"malformed template":        strings.Replace(validSource, "{{ input.latitude }}", "{{ input.latitude", 1),
+		"response header hook":      strings.Replace(validSource, "        - transform:\n            language: jq\n            expression: '{temperature: .body.current.temperature_2m}'", "        - setHeaders:\n            X-Late: invalid", 1),
+		"unbounded timeout":         strings.Replace(validSource, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - exec:\n            command: [/bin/true]\n            timeout: 2m", 1) + "security:\n  allowExecutableHooks: true\n",
+		"invalid jq":                strings.Replace(validSource, "'{temperature: .body.current.temperature_2m}'", "'{'", 1),
+		"invalid environment":       strings.Replace(validSource, "fromEnv: WEATHER_CLIENT", "fromEnv: 'BAD ENV'", 1),
+		"duplicate header case":     strings.Replace(validSource, "        X-Client: \"{{ vars.client }}\"", "        X-Client: one\n        x-client: two", 1),
+		"capability name collision": strings.Replace(validSource, "workflows:\n  report:", "workflows:\n  current:", 1),
 	}
 	for name, source := range tests {
 		t.Run(name, func(t *testing.T) {

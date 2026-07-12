@@ -83,7 +83,16 @@ func invokeOperation(ctx context.Context, operation Operation, service Service, 
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range toAnyMap(requestState["query"]) {
+	queryState := requestState["query"]
+	queryValues := map[string]any{}
+	if queryState != nil {
+		var ok bool
+		queryValues, ok = queryState.(map[string]any)
+		if !ok {
+			return nil, errors.New("request query must be an object")
+		}
+	}
+	for key, value := range queryValues {
 		values := endpoint.Query()
 		appendQuery(values, key, value)
 		endpoint.RawQuery = values.Encode()

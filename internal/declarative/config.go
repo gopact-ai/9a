@@ -283,6 +283,9 @@ func (c *Config) Validate() error {
 		if err := validateName("workflow", name); err != nil {
 			return err
 		}
+		if _, exists := c.Operations[name]; exists {
+			return fmt.Errorf("workflow %q conflicts with an operation of the same name", name)
+		}
 		if len(workflow.Steps) == 0 {
 			return fmt.Errorf("workflow %q requires at least one step", name)
 		}

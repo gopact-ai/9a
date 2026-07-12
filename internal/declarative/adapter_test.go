@@ -152,6 +152,27 @@ func TestDiscoveryMarksMutatingOperationsAndWorkflowsForApproval(t *testing.T) {
 	}
 }
 
+func TestDiscoveryTreatsLowercaseGETAsReadOnly(t *testing.T) {
+	config, err := Parse([]byte(strings.Replace(validSource, "method: GET", "method: get", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter()
+	p := provider.Provider{ID: "api/weather", Protocol: "api", Name: "weather"}
+	if err := adapter.Register(p, config); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range capabilities {
+		if item.Security.RequiresApproval != "never" {
+			t.Fatalf("%s approval=%q", item.ID, item.Security.RequiresApproval)
+		}
+	}
+}
+
 func TestAdapterRunsBoundedExecutableHook(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -375,5 +396,36 @@ func TestAdapterRedactsHTTPErrorURLAndQuery(t *testing.T) {
 	err = adapter.Invoke(context.Background(), p, current, "redact", json.RawMessage(`{"latitude":"query-secret"}`), &recordingSink{})
 	if err == nil || strings.Contains(err.Error(), "query-secret") || strings.Contains(err.Error(), endpoint) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestAdapterRejectsNonObjectQueryFromHook(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	defer server.Close()
+	source := strings.ReplaceAll(validSource, "https://api.open-meteo.com", server.URL)
+	source = strings.Replace(source, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - transform:\n            language: jq\n            expression: '.query = \"invalid\"'", 1)
+	config, err := Parse([]byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter()
+	p := provider.Provider{ID: "api/weather", Protocol: "api", Name: "weather"}
+	if err := adapter.Register(p, config); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current capability.Capability
+	for _, item := range capabilities {
+		if item.Source.UpstreamName == "current" {
+			current = item
+		}
+	}
+	err = adapter.Invoke(context.Background(), p, current, "bad-query", json.RawMessage(`{"latitude":1}`), &recordingSink{})
+	if err == nil || !strings.Contains(err.Error(), "query") || called {
+		t.Fatalf("error=%v called=%v", err, called)
 	}
 }

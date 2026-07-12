@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/gopact-ai/9a/internal/capability"
@@ -109,7 +110,7 @@ func makeCapability(config *Config, name, kind, description string, input, outpu
 }
 
 func operationRequiresApproval(operation Operation) bool {
-	if operation.Method != "GET" {
+	if !strings.EqualFold(operation.Method, "GET") {
 		return true
 	}
 	for _, hook := range append(append([]Hook(nil), operation.Hooks.BeforeRequest...), operation.Hooks.AfterResponse...) {
