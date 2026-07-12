@@ -1,0 +1,84 @@
+apiVersion: 9a.dev/v1alpha1
+kind: Skill
+metadata:
+  name: weather
+  description: Find a city and read its current weather with Open-Meteo.
+variables:
+  timezone:
+    fromEnv: WEATHER_TIMEZONE
+    default: auto
+services:
+  geocoding:
+    baseURL: https://geocoding-api.open-meteo.com
+    timeout: 10s
+  forecast:
+    baseURL: https://api.open-meteo.com
+    timeout: 10s
+operations:
+  find-location:
+    description: Resolve a city name to coordinates.
+    service: geocoding
+    method: GET
+    path: /v1/search
+    request:
+      query:
+        name: "{{ input.city }}"
+        count: 1
+        language: en
+    inputSchema:
+      type: object
+      required: [city]
+      properties:
+        city:
+          type: string
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: '{name: .body.results[0].name, country: .body.results[0].country, latitude: .body.results[0].latitude, longitude: .body.results[0].longitude}'
+  current-weather:
+    description: Read current temperature and wind for coordinates.
+    service: forecast
+    method: GET
+    path: /v1/forecast
+    request:
+      query:
+        latitude: "{{ input.latitude }}"
+        longitude: "{{ input.longitude }}"
+        current: temperature_2m,wind_speed_10m
+        timezone: "{{ vars.timezone }}"
+    inputSchema:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude:
+          type: number
+        longitude:
+          type: number
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: '{temperature: .body.current.temperature_2m, temperatureUnit: .body.current_units.temperature_2m, windSpeed: .body.current.wind_speed_10m, windUnit: .body.current_units.wind_speed_10m}'
+workflows:
+  city-weather:
+    description: Resolve a city and return a compact current-weather report.
+    inputSchema:
+      type: object
+      required: [city]
+      properties:
+        city:
+          type: string
+    steps:
+      - id: location
+        use: find-location
+        input:
+          city: "{{ input.city }}"
+      - id: weather
+        use: current-weather
+        input:
+          latitude: "{{ steps.location.latitude }}"
+          longitude: "{{ steps.location.longitude }}"
+    output:
+      language: jq
+      expression: '{city: .steps.location.name, country: .steps.location.country, weather: .steps.weather}'

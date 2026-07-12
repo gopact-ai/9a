@@ -1,0 +1,61 @@
+apiVersion: 9a.dev/v1alpha1
+kind: Skill
+metadata:
+  name: issue-tracker
+  description: Read and create issues through a bearer-authenticated JSON API.
+variables:
+  api-token:
+    fromEnv: ISSUE_TRACKER_TOKEN
+    sensitive: true
+    required: true
+  client-name:
+    fromEnv: ISSUE_TRACKER_CLIENT
+    default: ninea
+services:
+  issues:
+    baseURL: https://issues.example.com
+    timeout: 15s
+    headers:
+      Authorization: "Bearer {{ vars.api-token }}"
+      Accept: application/json
+operations:
+  get-issue:
+    description: Fetch one issue by id.
+    service: issues
+    method: GET
+    path: /v1/issues
+    request:
+      query:
+        id: "{{ input.id }}"
+    hooks:
+      beforeRequest:
+        - setHeaders:
+            X-Client: "{{ vars.client-name }}"
+      afterResponse:
+        - transform:
+            language: jq
+            expression: .body
+  create-issue:
+    description: Create an issue from a title and body.
+    service: issues
+    method: POST
+    path: /v1/issues
+    request:
+      body:
+        title: "{{ input.title }}"
+        body: "{{ input.body }}"
+    inputSchema:
+      type: object
+      required: [title, body]
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+    hooks:
+      beforeRequest:
+        - removeHeaders: [X-Debug]
+      afterResponse:
+        - transform:
+            language: jq
+            expression: '{id: .body.id, url: .body.url, state: .body.state}'

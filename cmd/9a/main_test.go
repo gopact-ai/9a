@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,6 +22,59 @@ func TestAdapterAddRequest(t *testing.T) {
 	want := api.Request{Action: "adapter.add", Protocol: "billing", Executable: "/opt/ninea/billing-adapter"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("adapterAddRequest()=%#v want %#v", got, want)
+	}
+}
+
+func TestDeclarativeCommandsBuildValidatedRequests(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "weather.yaml")
+	source := `apiVersion: 9a.dev/v1alpha1
+kind: Skill
+metadata:
+  name: weather
+services:
+  demo:
+    baseURL: https://example.com
+operations:
+  current:
+    service: demo
+    method: GET
+    path: /weather
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	add, err := declarativeFileRequest([]string{"add", path}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if add.Action != "declarative.add" || add.Source != source || add.Root != dir {
+		t.Fatalf("add=%#v", add)
+	}
+	diff, err := declarativeFileRequest([]string{"diff", path}, dir)
+	if err != nil || diff.Action != "declarative.diff" {
+		t.Fatalf("diff=%#v err=%v", diff, err)
+	}
+	remove, err := declarativeRemoveRequest([]string{"remove", "weather"})
+	if err != nil || remove.Action != "declarative.remove" || remove.Name != "weather" {
+		t.Fatalf("remove=%#v err=%v", remove, err)
+	}
+	valid, err := validateDeclarativeFile(path)
+	if err != nil || valid.Name != "weather" || len(valid.Capabilities) != 1 {
+		t.Fatalf("valid=%#v err=%v", valid, err)
+	}
+}
+
+func TestDeclarativeCommandsRejectInvalidSourceAndUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(path, []byte("kind: Skill\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := declarativeFileRequest([]string{"add", path}, t.TempDir()); err == nil {
+		t.Fatal("invalid source accepted")
+	}
+	if _, err := declarativeRemoveRequest([]string{"remove"}); err == nil {
+		t.Fatal("invalid remove usage accepted")
 	}
 }
 

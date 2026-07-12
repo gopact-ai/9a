@@ -49,3 +49,21 @@ func TestGlobalAdminIsExplicitAndDoesNotImplyCapabilityRead(t *testing.T) {
 		t.Fatal("admin implicitly exposed capability")
 	}
 }
+
+func TestGrantIfAbsentReportsOwnership(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/ninea.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db)
+	created, err := s.GrantIfAbsent(ctx, "agent", "cap", Invoke)
+	if err != nil || !created {
+		t.Fatalf("first created=%v err=%v", created, err)
+	}
+	created, err = s.GrantIfAbsent(ctx, "agent", "cap", Invoke)
+	if err != nil || created {
+		t.Fatalf("second created=%v err=%v", created, err)
+	}
+}

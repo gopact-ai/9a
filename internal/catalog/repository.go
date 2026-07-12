@@ -49,6 +49,40 @@ func (r *Repository) ReplaceProviderCapabilities(ctx context.Context, p provider
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capability_fts WHERE id IN (SELECT id FROM capabilities WHERE provider_id=?)`, p.ID); err != nil {
 		return 0, err
 	}
+	nextIDs := make(map[string]struct{}, len(caps))
+	for _, c := range caps {
+		nextIDs[c.ID] = struct{}{}
+	}
+	rows, queryErr := tx.QueryContext(ctx, `SELECT id FROM capabilities WHERE provider_id=?`, p.ID)
+	if queryErr != nil {
+		return 0, queryErr
+	}
+	var removedIDs []string
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			_ = rows.Close()
+			return 0, scanErr
+		}
+		if _, retained := nextIDs[id]; !retained {
+			removedIDs = append(removedIDs, id)
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		_ = rows.Close()
+		return 0, rowsErr
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return 0, closeErr
+	}
+	for _, id := range removedIDs {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id=?`, id); err != nil {
+			return 0, err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM projections WHERE capability_id=?`, id); err != nil {
+			return 0, err
+		}
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capabilities WHERE provider_id=?`, p.ID); err != nil {
 		return 0, err
 	}
@@ -131,4 +165,32 @@ func (r *Repository) ListProviders(ctx context.Context) ([]provider.Provider, er
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+func (r *Repository) DeleteProvider(ctx context.Context, providerID string) (err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM capability_fts WHERE id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM projections WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, providerID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE metadata SET value=value+1 WHERE key='catalog_revision'`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

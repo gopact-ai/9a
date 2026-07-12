@@ -7,14 +7,82 @@ import (
 	"fmt"
 	"github.com/gopact-ai/9a/internal/api"
 	callmodel "github.com/gopact-ai/9a/internal/call"
+	"github.com/gopact-ai/9a/internal/declarative"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+type validationResult struct {
+	Valid        bool     `json:"valid"`
+	Name         string   `json:"name"`
+	Digest       string   `json:"digest"`
+	Capabilities []string `json:"capabilities"`
+}
+
+func readDeclarativeFile(path string) ([]byte, *declarative.Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer file.Close()
+	source, err := io.ReadAll(io.LimitReader(file, declarative.MaxSourceBytes+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(source) > declarative.MaxSourceBytes {
+		return nil, nil, fmt.Errorf("source exceeds %d bytes", declarative.MaxSourceBytes)
+	}
+	config, err := declarative.Parse(source)
+	if err != nil {
+		return nil, nil, err
+	}
+	return source, config, nil
+}
+
+func validateDeclarativeFile(path string) (validationResult, error) {
+	_, config, err := readDeclarativeFile(path)
+	if err != nil {
+		return validationResult{}, err
+	}
+	capabilities := make([]string, 0, len(config.Operations)+len(config.Workflows))
+	for name := range config.Operations {
+		capabilities = append(capabilities, "api/"+config.Metadata.Name+"/"+name)
+	}
+	for name := range config.Workflows {
+		capabilities = append(capabilities, "api/"+config.Metadata.Name+"/"+name)
+	}
+	sort.Strings(capabilities)
+	return validationResult{Valid: true, Name: config.Metadata.Name, Digest: config.Digest, Capabilities: capabilities}, nil
+}
+
+func declarativeFileRequest(args []string, cwd string) (api.Request, error) {
+	if len(args) != 2 || (args[0] != "add" && args[0] != "diff") {
+		return api.Request{}, fmt.Errorf("usage: 9a <add|diff> <source.yaml>")
+	}
+	source, _, err := readDeclarativeFile(args[1])
+	if err != nil {
+		return api.Request{}, err
+	}
+	root, err := filepath.Abs(cwd)
+	if err != nil {
+		return api.Request{}, err
+	}
+	return api.Request{Action: "declarative." + args[0], Source: string(source), Root: root}, nil
+}
+
+func declarativeRemoveRequest(args []string) (api.Request, error) {
+	if len(args) != 2 || args[0] != "remove" {
+		return api.Request{}, fmt.Errorf("usage: 9a remove <skill-name>")
+	}
+	return api.Request{Action: "declarative.remove", Name: args[1]}, nil
+}
 
 func fail(v ...any) { fmt.Fprintln(os.Stderr, v...); os.Exit(1) }
 
@@ -137,6 +205,34 @@ func main() {
 	var q api.Request
 	plainString := false
 	switch a[0] {
+	case "validate":
+		if len(a) != 2 {
+			fail("usage: 9a validate <source.yaml>")
+		}
+		result, err := validateDeclarativeFile(a[1])
+		if err != nil {
+			fail(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			fail(err)
+		}
+		return
+	case "add", "diff":
+		cwd, err := os.Getwd()
+		if err != nil {
+			fail(err)
+		}
+		request, err := declarativeFileRequest(a, cwd)
+		if err != nil {
+			fail(err)
+		}
+		q = request
+	case "remove":
+		request, err := declarativeRemoveRequest(a)
+		if err != nil {
+			fail(err)
+		}
+		q = request
 	case "calls":
 		request, plain, err := callsRequest(a, os.Stdin)
 		if err != nil {

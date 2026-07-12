@@ -1,0 +1,85 @@
+apiVersion: 9a.dev/v1alpha1
+kind: Skill
+metadata:
+  name: order-operations
+  description: Combine customer, order, and inventory APIs into one operational Skill.
+variables:
+  platform-token:
+    fromEnv: PLATFORM_API_TOKEN
+    sensitive: true
+    required: true
+  request-source:
+    fromEnv: REQUEST_SOURCE
+    default: agent
+services:
+  customers:
+    baseURL: https://customers.example.com
+    headers:
+      Authorization: "Bearer {{ vars.platform-token }}"
+  orders:
+    baseURL: https://orders.example.com
+    headers:
+      Authorization: "Bearer {{ vars.platform-token }}"
+  inventory:
+    baseURL: https://inventory.example.com
+    headers:
+      Authorization: "Bearer {{ vars.platform-token }}"
+operations:
+  find-customer:
+    description: Resolve a customer email to an internal customer id.
+    service: customers
+    method: GET
+    path: /v1/customers/search
+    request:
+      query:
+        email: "{{ input.email }}"
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: '{id: .body.items[0].id, name: .body.items[0].name}'
+  list-orders:
+    description: List a customer's open orders.
+    service: orders
+    method: GET
+    path: /v1/orders
+    request:
+      query:
+        customer_id: "{{ input.customerId }}"
+        state: open
+    hooks:
+      beforeRequest:
+        - setHeaders:
+            X-Request-Source: "{{ vars.request-source }}"
+      afterResponse:
+        - transform:
+            language: jq
+            expression: .body.items
+  inventory-status:
+    description: Read available inventory for a product.
+    service: inventory
+    method: GET
+    path: /v1/availability
+    request:
+      query:
+        sku: "{{ input.sku }}"
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: '{sku: .body.sku, available: .body.available}'
+workflows:
+  customer-orders:
+    description: Turn an email address into a normalized open-order report.
+    steps:
+      - id: customer
+        use: find-customer
+        input:
+          email: "{{ input.email }}"
+      - id: orders
+        use: list-orders
+        input:
+          customerId: "{{ steps.customer.id }}"
+    output:
+      language: jq
+      expression: '{customer: .steps.customer, orders: .steps.orders}'

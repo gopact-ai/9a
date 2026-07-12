@@ -46,6 +46,65 @@ func TestReplaceProviderCapabilitiesIsRevisionedAndAtomic(t *testing.T) {
 	}
 }
 
+func TestReplaceRevokesOnlyRemovedCapabilityACLs(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/ninea.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	r := New(db)
+	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather"}
+	current, forecast := testCapability("current"), testCapability("forecast")
+	if _, err := r.ReplaceProviderCapabilities(ctx, p, []capability.Capability{current, forecast}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO acl(identity_id,capability_id,permission) VALUES('agent',?,'invoke'),('agent',?,'invoke')`, current.ID, forecast.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReplaceProviderCapabilities(ctx, p, []capability.Capability{forecast}); err != nil {
+		t.Fatal(err)
+	}
+	var removed, retained int
+	if err := db.QueryRow(`SELECT count(*) FROM acl WHERE capability_id=?`, current.ID).Scan(&removed); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM acl WHERE capability_id=?`, forecast.ID).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 || retained != 1 {
+		t.Fatalf("removed=%d retained=%d", removed, retained)
+	}
+}
+
+func TestDeleteProviderRemovesProjectionMetadata(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/ninea.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	r := New(db)
+	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather"}
+	current := testCapability("current")
+	if _, err := r.ReplaceProviderCapabilities(ctx, p, []capability.Capability{current}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projections(target,capability_id,mode,revision) VALUES('/tmp/skills',?,'copy',1)`, current.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DeleteProvider(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	var projections int
+	if err := db.QueryRow(`SELECT count(*) FROM projections WHERE capability_id=?`, current.ID).Scan(&projections); err != nil {
+		t.Fatal(err)
+	}
+	if projections != 0 {
+		t.Fatalf("projections=%d", projections)
+	}
+}
+
 func TestReplaceRejectsInvalidCapabilityWithoutChangingRevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

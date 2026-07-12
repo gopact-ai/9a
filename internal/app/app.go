@@ -16,6 +16,7 @@ import (
 	"github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/catalog"
+	"github.com/gopact-ai/9a/internal/declarative"
 	"github.com/gopact-ai/9a/internal/generator"
 	"github.com/gopact-ai/9a/internal/mount/dir"
 	"github.com/gopact-ai/9a/internal/provider"
@@ -87,7 +88,7 @@ func New(db *sql.DB) *App {
 }
 
 func builtInAdapters() map[string]provider.Adapter {
-	return map[string]provider.Adapter{"mcp": mcp.New(), "a2a": a2a.New()}
+	return map[string]provider.Adapter{"mcp": mcp.New(), "a2a": a2a.New(), "api": declarative.NewAdapter()}
 }
 
 func (a *App) beginOperation(ctx context.Context) (*operationLease, error) {
@@ -205,7 +206,7 @@ func (a *App) Restore(ctx context.Context) error {
 		return ErrRestoreRequiresFreshApp
 	}
 	for protocol := range a.adapters {
-		if protocol != "mcp" && protocol != "a2a" {
+		if protocol != "mcp" && protocol != "a2a" && protocol != "api" {
 			a.mu.Unlock()
 			return ErrRestoreRequiresFreshApp
 		}
@@ -245,6 +246,16 @@ func (a *App) Restore(ctx context.Context) error {
 		}
 		if adapters[p.Protocol] == nil {
 			return errors.New("persisted provider uses unsupported protocol: " + p.Protocol)
+		}
+		if p.Protocol == "api" {
+			source := p.Config["source"]
+			config, parseErr := declarative.Parse([]byte(source))
+			if parseErr != nil {
+				return fmt.Errorf("restore declarative source %q: %w", p.Name, parseErr)
+			}
+			if registerErr := adapters["api"].(*declarative.Adapter).Register(p, config); registerErr != nil {
+				return fmt.Errorf("restore declarative source %q: %w", p.Name, registerErr)
+			}
 		}
 		restoredProviders[p.ID] = p
 	}
@@ -314,6 +325,10 @@ func (a *App) AddProvider(ctx context.Context, p provider.Provider) error {
 	if err := lease.check(); err != nil {
 		return err
 	}
+	return a.addProviderLocked(lease, p)
+}
+
+func (a *App) addProviderLocked(lease *operationLease, p provider.Provider) error {
 	expectedID := p.Protocol + "/" + p.Name
 	if p.ID != expectedID {
 		return fmt.Errorf("provider %q has inconsistent provider id; expected %q", p.ID, expectedID)
@@ -335,11 +350,9 @@ func (a *App) AddProvider(ctx context.Context, p provider.Provider) error {
 		return lease.result(errors.Join(e, ad.Close(lease.ctx, p)))
 	}
 	a.mu.Lock()
-	if a.state != appOpen {
-		a.mu.Unlock()
-		return ErrAppClosed
+	if a.state == appOpen {
+		a.providers[p.ID] = p
 	}
-	a.providers[p.ID] = p
 	a.mu.Unlock()
 	return nil
 }
@@ -380,6 +393,9 @@ func (s *sink) Event(e provider.Event) error {
 }
 func (s *sink) Artifact(string, string, []byte) error { return nil }
 func (a *App) Invoke(ctx context.Context, identity, id string, input json.RawMessage) (json.RawMessage, error) {
+	if len(input) > call.MaxPayloadBytes {
+		return nil, call.ErrPayloadTooLarge
+	}
 	lease, err := a.beginOperation(ctx)
 	if err != nil {
 		return nil, err
