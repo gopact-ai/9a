@@ -49,15 +49,13 @@ func (a *App) UpdateWorkspaces(ctx context.Context, identity, root string, check
 	defer a.mutation.Unlock()
 	result := UpdateResult{}
 	currentByProvider := map[string][]capability.Capability{}
-	if check {
-		current, loadErr := catalog.New(a.db).ListCapabilities(ctx)
-		if loadErr != nil {
-			return result, loadErr
-		}
-		for _, item := range current {
-			key := item.Source.Protocol + "/" + item.Source.Provider
-			currentByProvider[key] = append(currentByProvider[key], item)
-		}
+	current, loadErr := catalog.New(a.db).ListCapabilities(ctx)
+	if loadErr != nil {
+		return result, loadErr
+	}
+	for _, item := range current {
+		key := item.Source.Protocol + "/" + item.Source.Provider
+		currentByProvider[key] = append(currentByProvider[key], item)
 	}
 	a.mu.RLock()
 	ids := make([]string, 0, len(a.providers))
@@ -78,23 +76,29 @@ func (a *App) UpdateWorkspaces(ctx context.Context, identity, root string, check
 	}
 	a.mu.RUnlock()
 	for _, entry := range entries {
+		if entry.ad == nil {
+			result.Providers = append(result.Providers, ProviderUpdate{entry.p.ID, "failed", "adapter unavailable"})
+			result.Failed++
+			continue
+		}
 		caps, e := entry.ad.Discover(lease.ctx, entry.p)
 		if e != nil {
 			result.Providers = append(result.Providers, ProviderUpdate{entry.p.ID, "failed", e.Error()})
 			result.Failed++
 			continue
 		}
-		if !check {
+		changed := !sameCapabilities(currentByProvider[entry.p.ID], caps)
+		if !check && changed {
 			if _, e = a.cat.ReplaceProviderCapabilities(lease.ctx, entry.p, caps); e != nil {
 				result.Providers = append(result.Providers, ProviderUpdate{entry.p.ID, "failed", e.Error()})
 				result.Failed++
 				continue
 			}
 		}
-		state := "updated"
-		if check {
-			state = "unchanged"
-			if !sameCapabilities(currentByProvider[entry.p.ID], caps) {
+		state := "unchanged"
+		if changed {
+			state = "updated"
+			if check {
 				state = "changed"
 			}
 		}

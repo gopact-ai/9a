@@ -71,6 +71,23 @@ func TestManagedSnapshotIsReadOnlyAndDetectsTampering(t *testing.T) {
 	if _, err := b.Update(context.Background(), attachment, snapshot); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(filepath.Join(attachment.Target, "references"), 0o755); err == nil {
+		_ = os.WriteFile(filepath.Join(attachment.Target, "references", "extra"), []byte("x"), 0o644)
+	} else {
+		if err := os.Chmod(attachment.Target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(attachment.Target, "extra"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inspection, err = b.Inspect(context.Background(), attachment, snapshot)
+	if err != nil || inspection.State != mount.InspectionTampered {
+		t.Fatalf("extra file inspection=%#v err=%v", inspection, err)
+	}
+	if _, err := b.Update(context.Background(), attachment, snapshot); err != nil {
+		t.Fatal(err)
+	}
 	data, _ := os.ReadFile(filepath.Join(attachment.Target, "SKILL.md"))
 	if string(data) != "hello" {
 		t.Fatalf("repair=%q", data)

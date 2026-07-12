@@ -34,6 +34,9 @@ falls back to integrity-checked read-only files. Select explicitly with
 directory permissions do not protect against the same OS account deliberately
 changing its own files.
 
+An attached workspace keeps its selected backend. Detach before switching from
+an effective directory backend to FUSE or vice versa.
+
 ## Add a JSON API as a Skill
 
 After starting the daemon, run this from a project directory:

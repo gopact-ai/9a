@@ -70,6 +70,19 @@ func (m *Manager) Attach(ctx context.Context, root string, policy workspace.Back
 	}
 	root = filepath.Clean(root)
 	if existing, err := m.repo.GetWorkspaceByRoot(ctx, root); err == nil {
+		if policy != workspace.PolicyAuto && policy != existing.Policy {
+			matches := (policy == workspace.PolicyFUSE && existing.Backend == workspace.BackendFUSE) || (policy == workspace.PolicyDirectory && existing.Backend == workspace.BackendDirectory)
+			if !matches {
+				return Status{}, fmt.Errorf("workspace uses %s; detach before switching to %s", existing.Backend, policy)
+			}
+			existing.Policy = policy
+			existing.State = workspace.StateHealthy
+			existing.FallbackReason = ""
+			existing.UpdatedAt = time.Now().UTC()
+			if err = m.repo.PutWorkspace(ctx, existing); err != nil {
+				return Status{}, err
+			}
+		}
 		return m.ensureBuiltin(ctx, existing)
 	} else if !errors.Is(err, workspace.ErrNotFound) {
 		return Status{}, err

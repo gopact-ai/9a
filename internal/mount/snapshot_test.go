@@ -25,4 +25,7 @@ func TestNewSnapshotRejectsUnsafeAndDuplicatePaths(t *testing.T) {
 			t.Fatalf("accepted %#v", files)
 		}
 	}
+	if _, err := NewSnapshot("id", "../escape", "v1", 1, nil); err == nil {
+		t.Fatal("unsafe name accepted")
+	}
 }

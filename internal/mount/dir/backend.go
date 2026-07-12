@@ -199,6 +199,43 @@ func (b *Backend) Inspect(ctx context.Context, a mount.Attachment, s mount.Snaps
 	if m.Digest != want.Digest || len(m.Files) != len(want.Files) {
 		return mount.Inspection{State: mount.InspectionTampered, Reason: "manifest differs"}, nil
 	}
+	expectedFiles := map[string]os.FileMode{marker: 0o400}
+	expectedDirs := map[string]bool{".": true}
+	for _, f := range want.Files {
+		expectedFiles[filepath.FromSlash(f.Path)] = os.FileMode(f.Mode)
+		for parent := filepath.Dir(filepath.FromSlash(f.Path)); parent != "."; parent = filepath.Dir(parent) {
+			expectedDirs[parent] = true
+		}
+	}
+	if walkErr := filepath.WalkDir(a.Target, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(a.Target, path)
+		if relErr != nil {
+			return relErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink %s", rel)
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		if entry.IsDir() {
+			if !expectedDirs[rel] || info.Mode().Perm() != 0o555 {
+				return fmt.Errorf("unexpected directory %s", rel)
+			}
+			return nil
+		}
+		mode, ok := expectedFiles[rel]
+		if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
+			return fmt.Errorf("unexpected file %s", rel)
+		}
+		return nil
+	}); walkErr != nil {
+		return mount.Inspection{State: mount.InspectionTampered, Reason: walkErr.Error()}, nil
+	}
 	for _, f := range want.Files {
 		path := filepath.Join(a.Target, filepath.FromSlash(f.Path))
 		info, e := os.Stat(path)

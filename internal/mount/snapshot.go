@@ -35,6 +35,9 @@ func NewSnapshot(logicalID, name, version string, revision int64, files []File) 
 	if logicalID == "" || name == "" {
 		return Snapshot{}, fmt.Errorf("snapshot identity is required")
 	}
+	if name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, "/\\") {
+		return Snapshot{}, fmt.Errorf("unsafe snapshot name %q", name)
+	}
 	copyFiles := make([]File, len(files))
 	copy(copyFiles, files)
 	seen := map[string]bool{}

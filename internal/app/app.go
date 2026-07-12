@@ -364,16 +364,16 @@ func (a *App) RemoveProvider(ctx context.Context, identity, protocol, name strin
 	if err != nil {
 		return err
 	}
+	if ad != nil {
+		if err = ad.Close(lease.ctx, p); err != nil {
+			return err
+		}
+	}
 	for _, c := range capabilities {
 		if c.Source.Protocol == protocol && c.Source.Provider == name {
 			if err = a.projections.RemoveBySource(lease.ctx, "capability", c.ID); err != nil {
 				return err
 			}
-		}
-	}
-	if ad != nil {
-		if err = ad.Close(lease.ctx, p); err != nil {
-			return err
 		}
 	}
 	if err = catalog.New(a.db).DeleteProvider(lease.ctx, id); err != nil {

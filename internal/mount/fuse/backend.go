@@ -66,11 +66,6 @@ func (b *Backend) Attach(ctx context.Context, root, workspaceID string, s mount.
 		_ = os.Remove(target)
 		return mount.Attachment{}, err
 	}
-	if err = server.WaitMount(); err != nil {
-		_ = server.Unmount()
-		_ = os.Remove(target)
-		return mount.Attachment{}, err
-	}
 	a := mount.Attachment{WorkspaceID: workspaceID, LogicalID: s.LogicalID, Target: target}
 	b.active[target] = &activeMount{server, s, a}
 	return a, nil
@@ -87,8 +82,8 @@ func (b *Backend) Update(ctx context.Context, a mount.Attachment, s mount.Snapsh
 	}
 	next, err := b.Attach(ctx, filepath.Dir(a.Target), a.WorkspaceID, s)
 	if err != nil {
-		_, _ = b.Attach(context.Background(), filepath.Dir(a.Target), a.WorkspaceID, old.snapshot)
-		return a, err
+		_, restoreErr := b.Attach(context.Background(), filepath.Dir(a.Target), a.WorkspaceID, old.snapshot)
+		return a, errors.Join(err, restoreErr)
 	}
 	return next, nil
 }
@@ -124,6 +119,9 @@ func (b *Backend) Detach(ctx context.Context, a mount.Attachment) error {
 	delete(b.active, a.Target)
 	b.mu.Unlock()
 	if err := active.server.Unmount(); err != nil {
+		b.mu.Lock()
+		b.active[a.Target] = active
+		b.mu.Unlock()
 		return err
 	}
 	return os.Remove(a.Target)
