@@ -1,0 +1,7 @@
+title = "NineA gitleaks config"
+
+[allowlist]
+description = "Project placeholders"
+regexes = [
+  '''github\.com/gopact-ai/9a''',
+]

@@ -1,0 +1,38 @@
+# Contributing
+
+Issues and pull requests are welcome. A pull request should describe its user
+impact, compatibility impact, and verification.
+
+For Go changes, run:
+
+```sh
+make check
+make test
+GOFLAGS=-race make test
+make build
+make test-e2e
+```
+
+For documentation changes, also run:
+
+```sh
+make test-docs-check
+make docs-check
+```
+
+`make docs-check` uses Docker for Markdown linting, workflow validation, secret
+scanning, and link checking. If Docker is unavailable, run the pinned local
+Markdown command and report that the full check was environment-blocked:
+
+```sh
+npx --yes markdownlint-cli2@0.23.0 "**/*.md" \
+  "#.worktrees/**" "#.agents/**"
+```
+
+Keep changes focused, preserve default-deny authorization, and add regression
+coverage for behavior changes and bug fixes.
+
+New upstream integrations should target the language-neutral contract in
+[Building adapters](adapters.md). Keep protocol-specific authentication,
+discovery, and result translation at the adapter boundary; the Catalog and
+generated Skills must remain protocol-neutral.

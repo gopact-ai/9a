@@ -1,0 +1,11 @@
+exclude = [
+  "^mailto:",
+  "^https://github.com/gopact-ai/9a($|/)",
+]
+exclude_path = [
+  ".worktrees",
+  ".agents",
+]
+max_retries = 2
+timeout = 20
+accept = [200, 204, 206, 429]
