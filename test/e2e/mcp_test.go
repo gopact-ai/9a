@@ -33,8 +33,11 @@ func socketPath(t *testing.T) string {
 }
 func run(t *testing.T, env []string, bin string, input string, args ...string) []byte {
 	t.Helper()
+	if len(args) == 4 && args[0] == "project" && args[1] == "add" {
+		cleanupReadOnlyTree(t, filepath.Dir(args[3]))
+	}
 	c := exec.Command(bin, args...)
-	c.Env = env
+	c.Env = append(env, "NINEA_AUTO_ATTACH=0")
 	c.Stdin = strings.NewReader(input)
 	b, err := c.CombinedOutput()
 	if err != nil {
@@ -42,10 +45,22 @@ func run(t *testing.T, env []string, bin string, input string, args ...string) [
 	}
 	return b
 }
+
+func cleanupReadOnlyTree(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
+}
 func runFails(t *testing.T, env []string, bin string, input string, args ...string) []byte {
 	t.Helper()
 	c := exec.Command(bin, args...)
-	c.Env = env
+	c.Env = append(env, "NINEA_AUTO_ATTACH=0")
 	c.Stdin = strings.NewReader(input)
 	b, err := c.CombinedOutput()
 	if err == nil {

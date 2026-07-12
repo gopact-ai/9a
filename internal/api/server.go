@@ -11,6 +11,7 @@ import (
 	"github.com/gopact-ai/9a/internal/declarative"
 	"github.com/gopact-ai/9a/internal/provider"
 	"github.com/gopact-ai/9a/internal/search"
+	"github.com/gopact-ai/9a/internal/workspace"
 	"net"
 	"net/http"
 	"os"
@@ -35,6 +36,10 @@ type Request struct {
 	Root        string          `json:"root,omitempty"`
 	Input       json.RawMessage `json:"input,omitempty"`
 	Source      string          `json:"source,omitempty"`
+	Backend     string          `json:"backend,omitempty"`
+	Workspace   string          `json:"workspace,omitempty"`
+	Check       bool            `json:"check,omitempty"`
+	All         bool            `json:"all,omitempty"`
 }
 type Response struct {
 	Data  any    `json:"data,omitempty"`
@@ -97,6 +102,14 @@ func Listen(socket string, a *app.App) (*Server, error) {
 				return
 			}
 			err = a.AddAdapter(ctx, q.Protocol, q.Executable)
+		case "workspace.attach":
+			data, err = a.AttachWorkspace(ctx, q.Root, workspace.BackendPolicy(q.Backend))
+		case "workspace.status":
+			data, err = a.WorkspaceStatus(ctx, q.Root)
+		case "workspace.update":
+			data, err = a.UpdateWorkspaces(ctx, q.Root, q.Check, q.All)
+		case "workspace.detach":
+			err = a.DetachWorkspace(ctx, q.Root)
 		case "provider.add":
 			if !a.IsAdmin(ctx, identity) {
 				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))
@@ -104,6 +117,12 @@ func Listen(socket string, a *app.App) (*Server, error) {
 			}
 			p := provider.Provider{ID: q.Protocol + "/" + q.Name, Protocol: q.Protocol, Name: q.Name, Endpoint: q.Endpoint}
 			err = a.AddProvider(ctx, p)
+		case "provider.remove":
+			if !a.IsAdmin(ctx, identity) {
+				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))
+				return
+			}
+			err = a.RemoveProvider(ctx, identity, q.Protocol, q.Name)
 		case "declarative.add":
 			if !a.IsAdmin(ctx, identity) {
 				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))
@@ -137,7 +156,7 @@ func Listen(socket string, a *app.App) (*Server, error) {
 		case "search":
 			data, err = a.Search(ctx, identity, search.Query{Text: q.Query, Limit: 20})
 		case "project.add":
-			err = a.Project(ctx, identity, q.Capability, q.Root)
+			err = a.Project(ctx, identity, q.Capability, q.Workspace, q.Root)
 		case "invoke":
 			data, err = a.Invoke(ctx, identity, q.Capability, q.Input)
 		case "call.start":

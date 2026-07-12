@@ -24,7 +24,7 @@ func TestRepositoryWorkspaceAndManagedSkillLifecycle(t *testing.T) {
 	if err != nil || got.ID != w.ID || got.Backend != BackendDirectory {
 		t.Fatalf("workspace=%#v err=%v", got, err)
 	}
-	s := ManagedSkill{WorkspaceID: w.ID, LogicalID: "builtin/using-ninea", TargetName: "using-ninea", SourceKind: "builtin", SourceID: "using-ninea", CatalogRevision: 1, SkillVersion: "v1", Digest: "abc", MountState: "attached", UpdatedAt: time.Now().UTC()}
+	s := ManagedSkill{WorkspaceID: w.ID, LogicalID: "builtin/using-ninea", TargetRoot: w.SkillsRoot, TargetName: "using-ninea", SourceKind: "builtin", SourceID: "using-ninea", CatalogRevision: 1, SkillVersion: "v1", Digest: "abc", MountState: "attached", UpdatedAt: time.Now().UTC()}
 	if err := repo.PutManagedSkill(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}

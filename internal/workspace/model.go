@@ -29,8 +29,8 @@ type Workspace struct {
 }
 
 type ManagedSkill struct {
-	WorkspaceID, LogicalID, TargetName, SourceKind, SourceID string
-	CatalogRevision                                          int64
-	SkillVersion, Digest, MountState                         string
-	UpdatedAt                                                time.Time
+	WorkspaceID, LogicalID, TargetRoot, TargetName, SourceKind, SourceID string
+	CatalogRevision                                                      int64
+	SkillVersion, Digest, MountState                                     string
+	UpdatedAt                                                            time.Time
 }

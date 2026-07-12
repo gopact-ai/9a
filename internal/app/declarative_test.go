@@ -62,6 +62,7 @@ func TestDeclarativeSourceLifecycleAndRestore(t *testing.T) {
 	ctx := context.Background()
 	database := filepath.Join(t.TempDir(), "ninea.db")
 	workspace := t.TempDir()
+	cleanupReadOnlyProjection(t, workspace)
 	source := []byte(strings.Replace(appDeclarativeSource, "SERVER_URL", server.URL, 1))
 
 	db, err := store.Open(ctx, database)
@@ -142,6 +143,7 @@ func TestDeclarativeUpdateAndRemoveRollbackOnDatabaseFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace := t.TempDir()
+	cleanupReadOnlyProjection(t, workspace)
 	source := []byte(strings.Replace(appDeclarativeSource, "SERVER_URL", server.URL, 1))
 	if _, err := a.AddDeclarative(ctx, "admin", source, workspace); err != nil {
 		t.Fatal(err)
@@ -193,6 +195,7 @@ func TestConcurrentDeclarativeUpdatesStayConsistent(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace := t.TempDir()
+	cleanupReadOnlyProjection(t, workspace)
 	base := strings.Replace(appDeclarativeSource, "SERVER_URL", server.URL, 1)
 	sources := [][]byte{[]byte(strings.Replace(base, "Current weather.", "Weather version one.", 1)), []byte(strings.Replace(base, "Current weather.", "Weather version two.", 1))}
 	var wait sync.WaitGroup
@@ -229,6 +232,18 @@ func TestConcurrentDeclarativeUpdatesStayConsistent(t *testing.T) {
 	}
 }
 
+func cleanupReadOnlyProjection(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
+}
+
 func TestDeclarativeAddCancellationUsesDetachedRollback(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "ninea.db"))
@@ -243,6 +258,7 @@ func TestDeclarativeAddCancellationUsesDetachedRollback(t *testing.T) {
 	gate := &cancelingCatalog{catalogRepository: a.cat, entered: make(chan struct{})}
 	a.cat = gate
 	workspace := t.TempDir()
+	cleanupReadOnlyProjection(t, workspace)
 	source := []byte(strings.Replace(appDeclarativeSource, "SERVER_URL", "http://127.0.0.1:1", 1))
 	requestCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)

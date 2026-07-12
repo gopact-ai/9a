@@ -33,11 +33,11 @@ CREATE TABLE IF NOT EXISTS workspaces (
 );
 CREATE TABLE IF NOT EXISTS managed_skills (
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
- logical_id TEXT NOT NULL, target_name TEXT NOT NULL, source_kind TEXT NOT NULL,
+ logical_id TEXT NOT NULL, target_root TEXT NOT NULL, target_name TEXT NOT NULL, source_kind TEXT NOT NULL,
  source_id TEXT NOT NULL, catalog_revision INTEGER NOT NULL,
  skill_version TEXT NOT NULL, digest TEXT NOT NULL, mount_state TEXT NOT NULL,
  updated_at TEXT NOT NULL,
- PRIMARY KEY(workspace_id,logical_id), UNIQUE(workspace_id,target_name)
+ PRIMARY KEY(workspace_id,logical_id), UNIQUE(workspace_id,target_root,target_name)
 );
 CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, capability_id TEXT NOT NULL, identity_id TEXT NOT NULL, state TEXT NOT NULL, code TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS call_inputs (call_id TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE, data_json BLOB NOT NULL);

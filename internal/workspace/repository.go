@@ -61,11 +61,11 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, id string) error {
 	return err
 }
 func (r *Repository) PutManagedSkill(ctx context.Context, s ManagedSkill) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO managed_skills(workspace_id,logical_id,target_name,source_kind,source_id,catalog_revision,skill_version,digest,mount_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,logical_id) DO UPDATE SET target_name=excluded.target_name,source_kind=excluded.source_kind,source_id=excluded.source_id,catalog_revision=excluded.catalog_revision,skill_version=excluded.skill_version,digest=excluded.digest,mount_state=excluded.mount_state,updated_at=excluded.updated_at`, s.WorkspaceID, s.LogicalID, s.TargetName, s.SourceKind, s.SourceID, s.CatalogRevision, s.SkillVersion, s.Digest, s.MountState, s.UpdatedAt.Format(time.RFC3339Nano))
+	_, err := r.db.ExecContext(ctx, `INSERT INTO managed_skills(workspace_id,logical_id,target_root,target_name,source_kind,source_id,catalog_revision,skill_version,digest,mount_state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,logical_id) DO UPDATE SET target_root=excluded.target_root,target_name=excluded.target_name,source_kind=excluded.source_kind,source_id=excluded.source_id,catalog_revision=excluded.catalog_revision,skill_version=excluded.skill_version,digest=excluded.digest,mount_state=excluded.mount_state,updated_at=excluded.updated_at`, s.WorkspaceID, s.LogicalID, s.TargetRoot, s.TargetName, s.SourceKind, s.SourceID, s.CatalogRevision, s.SkillVersion, s.Digest, s.MountState, s.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
 func (r *Repository) ListManagedSkills(ctx context.Context, workspaceID string) ([]ManagedSkill, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,logical_id,target_name,source_kind,source_id,catalog_revision,skill_version,digest,mount_state,updated_at FROM managed_skills WHERE workspace_id=? ORDER BY target_name`, workspaceID)
+	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,logical_id,target_root,target_name,source_kind,source_id,catalog_revision,skill_version,digest,mount_state,updated_at FROM managed_skills WHERE workspace_id=? ORDER BY target_root,target_name`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (r *Repository) ListManagedSkills(ctx context.Context, workspaceID string) 
 	for rows.Next() {
 		var s ManagedSkill
 		var updated string
-		if err := rows.Scan(&s.WorkspaceID, &s.LogicalID, &s.TargetName, &s.SourceKind, &s.SourceID, &s.CatalogRevision, &s.SkillVersion, &s.Digest, &s.MountState, &updated); err != nil {
+		if err := rows.Scan(&s.WorkspaceID, &s.LogicalID, &s.TargetRoot, &s.TargetName, &s.SourceKind, &s.SourceID, &s.CatalogRevision, &s.SkillVersion, &s.Digest, &s.MountState, &updated); err != nil {
 			return nil, err
 		}
 		s.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated)
