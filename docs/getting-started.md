@@ -1,4 +1,4 @@
-# Getting Started
+# User Guide
 
 Install the `9a` client and `ninead` daemon on macOS or Linux with Homebrew:
 
@@ -10,13 +10,37 @@ Building from source requires Go 1.25.12 or newer. NineA currently requires a
 platform with Unix domain sockets. The examples below use `openssl` to generate
 a bootstrap token.
 
-## Let an agent learn NineA
+## Use NineA through an AI agent
+
+NineA is designed to be operated by an AI agent. The user supplies intent and
+credentials; the agent reads the built-in instructions, inspects schemas, and
+runs explicit commands. For example:
+
+```text
+Use NineA to find a weather capability and get Shanghai's current temperature.
+
+Turn examples/declarative/api-bundle.yaml into one Skill for this workspace.
+
+Connect the MCP server at /absolute/path/to/server, show me the capabilities it
+adds, and grant this agent only the permissions needed for the selected tool.
+
+Check whether this workspace's managed Skills need an update. Show me the
+changes before applying them.
+```
 
 The first `search`, `project add`, `add`, `providers add`, `adapters add`, or
 `update` command in a workspace automatically attaches the built-in
 `.agents/skills/using-ninea` Skill. It contains concise operating instructions
-and offline references for declarative YAML, MCP, A2A, custom adapters, and
-troubleshooting.
+and offline references for declarative YAML, MCP, A2A, custom adapters,
+lifecycle management, and troubleshooting. The agent can learn NineA from the
+filesystem without copying the entire manual into its prompt.
+
+Package installation, daemon restarts, credential changes, provider
+registration, ACL changes, and invocations with upstream side effects remain
+explicit operations. Give the agent the minimum token and environment needed
+for the task; do not put secrets in a prompt or YAML file.
+
+Start from a project directory:
 
 ```sh
 9a search "capability the user needs"
@@ -36,6 +60,42 @@ changing its own files.
 
 An attached workspace keeps its selected backend. Detach before switching from
 an effective directory backend to FUSE or vice versa.
+
+## Upgrade NineA
+
+`brew upgrade` and `9a update` operate at different layers:
+
+- `brew upgrade gopact-ai/tap/ninea` installs newer `9a` and `ninead` binaries.
+- `9a update --check` previews Catalog and managed Skill changes without
+  applying them.
+- `9a update` rediscovers providers, upgrades the built-in `using-ninea` Skill,
+  and reconciles or repairs managed views in the current workspace.
+- `9a update --all` applies that workspace reconciliation to every attached
+  workspace. It requires an administrator token.
+
+Use this sequence:
+
+```sh
+brew update
+brew upgrade gopact-ai/tap/ninea
+
+# Stop the old daemon, then start the new ninead with the same --state and
+# --socket values. Do not set NINEA_BOOTSTRAP_TOKEN again.
+
+9a update --check
+9a update
+9a status --json
+```
+
+An upgrade preserves the SQLite state database, registered providers,
+declarative sources, ACLs, and call history. Back up the state database before
+an upgrade when it contains important configuration. Keep the previous release
+archive until the new daemon has started and the workspace status is healthy.
+
+`9a detach` is not an uninstall command. It removes only NineA-managed views
+from the current workspace and leaves user-owned files and daemon state intact.
+To stop using NineA completely, detach the required workspaces, stop `ninead`,
+then uninstall the formula.
 
 ## Add a JSON API as a Skill
 
@@ -297,4 +357,5 @@ stop that leaves an active record persisted, restore completes that record as
 - **`call_quota_exceeded: call quota exceeded`:** the identity or daemon has
   reached an active-call, retained-call, or retained-bytes limit. Wait for
   active calls to finish; retained records require offline archival or a new
-  state database because the current alpha has no online call deletion or GC.
+  state database because the current 0.x release has no online call deletion or
+  GC.

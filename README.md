@@ -103,6 +103,18 @@ Homebrew installs the `9a` client and `ninead` daemon on macOS or Linux:
 brew install gopact-ai/tap/ninea
 ```
 
+Upgrade both commands with:
+
+```sh
+brew upgrade gopact-ai/tap/ninea
+```
+
+After upgrading, restart `ninead` with the same state database and socket, then
+run `9a update --check` and `9a update` to refresh the built-in Skill and every
+managed workspace view. See [Upgrade NineA](docs/getting-started.md#upgrade-ninea)
+for the safe sequence and the distinction between a software upgrade and a
+workspace update.
+
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) provides archives
 and SHA-256 checksums for macOS and Linux on x86-64 and ARM64.
 
@@ -118,8 +130,9 @@ NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
 ```
 
 Leave `NINEA_BOOTSTRAP_TOKEN` unset on later starts. The
-[Getting Started guide](docs/getting-started.md) covers persistent startup,
-separate agent identities, ACLs, MCP, A2A, and the complete command reference.
+[User Guide](docs/getting-started.md) covers AI-agent operation, persistent
+startup, upgrades, separate agent identities, ACLs, MCP, A2A, and the complete
+command reference.
 
 From a workspace, the normal agent workflow starts automatically:
 
@@ -190,8 +203,8 @@ requirement.
   templates, hooks, workflows, lifecycle, and troubleshooting
 - [Declarative examples](examples/declarative/README.md)—public weather,
   authenticated APIs, multi-API bundles, and executable hooks
-- [Getting Started](docs/getting-started.md)—daemon, identities, MCP, A2A, and
-  CLI reference
+- [User Guide](docs/getting-started.md)—AI-agent operation, installation,
+  upgrades, daemon, identities, MCP, A2A, and CLI reference
 - [Building adapters](docs/adapters.md)—custom executable protocol and registry
 - [Architecture and Plan 9](docs/architecture.md)
 - [Security](docs/SECURITY.md)

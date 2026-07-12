@@ -269,7 +269,7 @@ Primary references:
 1. An administrator registers a provider under an adapter protocol.
 2. NineA asks the adapter to discover upstream operations.
 3. The adapter returns protocol-neutral capability descriptions.
-4. The current alpha validates required identity and contract fields. The
+4. The current 0.x release validates required identity and contract fields. The
    executable adapter contract additionally requires schema shape, lifecycle,
    and message-bound validation before external adapters are accepted.
 5. The Catalog atomically replaces that provider's previous revision.

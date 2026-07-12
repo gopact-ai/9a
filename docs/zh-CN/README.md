@@ -98,6 +98,17 @@ Homebrew 会在 macOS 或 Linux 上安装 `9a` client 和 `ninead` daemon：
 brew install gopact-ai/tap/ninea
 ```
 
+升级 client 和 daemon：
+
+```sh
+brew upgrade gopact-ai/tap/ninea
+```
+
+升级后使用原来的 state database 和 socket 重启 `ninead`，再执行
+`9a update --check` 预览变化，执行 `9a update` 刷新内置 Skill 和当前 workspace 的
+托管视图。软件升级与 workspace 更新的完整区别见英文
+[Upgrade NineA](../getting-started.md#upgrade-ninea)。
+
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) 提供 macOS 和 Linux 的
 x86-64、ARM64 归档及 SHA-256 校验文件。
 
@@ -113,8 +124,8 @@ NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
 ```
 
 后续启动必须取消 `NINEA_BOOTSTRAP_TOKEN`。英文
-[Getting Started](../getting-started.md) 介绍持久化启动、独立 Agent 身份、ACL、MCP、
-A2A 和完整命令参考。
+[User Guide](../getting-started.md) 介绍 AI Agent 使用方式、持久化启动、版本升级、独立
+Agent 身份、ACL、MCP、A2A 和完整命令参考。
 
 ```sh
 9a search "weather"
@@ -164,7 +175,7 @@ FUSE 提供内核级只读保证。目录回退能阻止普通工具误修改，
   workflow、生命周期和故障排查
 - [声明式示例](../../examples/declarative/README.md)：天气、认证 API、多 API 聚合和
   executable hook
-- [Getting Started](../getting-started.md)
+- [User Guide](../getting-started.md)：Agent 使用方式、安装升级、daemon、身份与命令参考
 - [Building adapters](../adapters.md)
 - [Architecture and Plan 9](../architecture.md)
 - [Security](../SECURITY.md)

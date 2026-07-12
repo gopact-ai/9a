@@ -18,6 +18,9 @@ editing projected files.
 - Connect MCP, A2A, or another protocol: read `references/integrations.md`.
 - Repair, update, inspect, or remove a workspace view: read
   `references/troubleshooting.md`.
+- Upgrade the installed software: read `references/troubleshooting.md`, explain
+  the difference between `brew upgrade` and `9a update`, and obtain user
+  approval before changing packages or restarting the daemon.
 
 Prefer projected invoke commands over constructing direct provider requests.
 Do not place credentials in YAML, prompts, command arguments, or projected

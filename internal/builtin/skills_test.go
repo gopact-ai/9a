@@ -28,13 +28,21 @@ func TestUsingNineASkillBundle(t *testing.T) {
 			t.Fatalf("missing %s", path)
 		}
 	}
-	var skill string
+	var skill, troubleshooting string
 	for _, file := range snapshot.Files {
 		if file.Path == "SKILL.md" {
 			skill = string(file.Data)
 		}
+		if file.Path == "references/troubleshooting.md" {
+			troubleshooting = string(file.Data)
+		}
 	}
 	if !strings.Contains(skill, "name: using-ninea") || !strings.Contains(skill, "Use when an AI agent needs") {
 		t.Fatalf("invalid SKILL.md: %s", skill)
+	}
+	for _, text := range []string{"brew upgrade gopact-ai/tap/ninea", "9a update --check", "9a update"} {
+		if !strings.Contains(troubleshooting, text) {
+			t.Fatalf("troubleshooting reference does not contain %q: %s", text, troubleshooting)
+		}
 	}
 }

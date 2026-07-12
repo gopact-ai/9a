@@ -118,8 +118,8 @@ but consuming agents must still treat upstream text as data rather than trusted
 instructions.
 
 Call inputs, states, results, events, artifacts, adapter registrations,
-providers, ACLs, and the Catalog are stored in SQLite. The current alpha does
-not encrypt the database at rest. Logs and adapter stderr may also contain
+providers, ACLs, and the Catalog are stored in SQLite. The current 0.x release
+does not encrypt the database at rest. Logs and adapter stderr may also contain
 provider diagnostics, so protect and review them.
 
 Persistent call admission is capped at 8 active calls, 1,000 retained calls,

@@ -16,6 +16,26 @@ workspace view; it preserves providers, API sources, ACLs, and call history.
 Because update rediscovers providers and changes the shared Catalog, it requires
 an administrator token.
 
+## Upgrade the software
+
+Do not confuse a software upgrade with a workspace update:
+
+```sh
+brew update
+brew upgrade gopact-ai/tap/ninea
+# Restart ninead with the same state database and socket, without the bootstrap
+# token, then:
+9a update --check
+9a update
+9a status --json
+```
+
+`brew upgrade` replaces the `9a` and `ninead` binaries. `9a update` upgrades the
+built-in Skill and reconciles managed views; it does not install software. Get
+the user's approval before changing packages or restarting `ninead`. Preserve
+the state database and back it up when it contains important configuration.
+Use `9a update --all` only when every attached workspace should be reconciled.
+
 Common checks:
 
 - Cannot connect: verify `ninead` and `NINEA_SOCKET`.

@@ -26,6 +26,7 @@ require_file .github/workflows/go-ci.yml
 require_file .gitignore
 require_file README.md
 require_file docs/zh-CN/README.md
+require_file docs/getting-started.md
 require_file internal/builtin/skills/using-ninea/SKILL.md
 require_file internal/builtin/skills/using-ninea/agents/openai.yaml
 require_text .gitignore 'dist/'
@@ -52,6 +53,9 @@ require_text .github/workflows/release.yml 'subject-checksums: ./dist/checksums.
 require_text .github/workflows/go-ci.yml 'make test-release-check'
 require_text README.md 'brew install gopact-ai/tap/ninea'
 require_text docs/zh-CN/README.md 'brew install gopact-ai/tap/ninea'
+require_text README.md 'brew upgrade gopact-ai/tap/ninea'
+require_text docs/zh-CN/README.md 'brew upgrade gopact-ai/tap/ninea'
+require_text docs/getting-started.md 'brew upgrade gopact-ai/tap/ninea'
 require_text README.md '9a update'
 require_text README.md '9a detach'
 require_text internal/builtin/skills/using-ninea/SKILL.md 'name: using-ninea'
