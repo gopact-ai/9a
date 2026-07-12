@@ -25,9 +25,9 @@ MCP / A2A / API ─────────────→ Adapter
 Agent ─────────────────────→ NineA runtime ─────────→ Adapter ─→ upstream
 ```
 
-NineA includes built-in MCP and A2A adapters. The executable adapter registry
-extends the same capability model to additional protocols without defining a
-new agent-facing interface.
+NineA includes built-in declarative API, MCP, and A2A adapters. The executable
+adapter registry extends the same capability model to additional protocols
+without defining a new agent-facing interface.
 
 ## Implementation model
 
@@ -37,16 +37,22 @@ An adapter owns the protocol-specific edge. It discovers upstream operations,
 translates them into NineA Capabilities, invokes them, reports health, and
 cancels work when the upstream protocol supports cancellation.
 
-The built-in MCP and A2A adapters are Go implementations of NineA's internal
-adapter interface. Separately installed protocol integrations use the
+The built-in API adapter compiles strict YAML into HTTP operations and ordered
+workflows. It resolves environment-backed variables at invocation time and
+runs a bounded request/response hook pipeline. This path skips discovery
+because the source is already the operator-reviewed capability declaration.
+
+The built-in MCP and A2A adapters discover capabilities from live upstream
+systems. Separately installed protocol integrations use the
 `9a.adapter/v1` executable contract, so they can be written in any language,
 registered without recompiling `ninead`, and isolated as separate processes.
-The generic HTTP adapter is an example of this external executable model.
+The generic HTTP adapter is a legacy example of this external executable model;
+new JSON API integrations should normally use declarative YAML.
 
 The executable adapter contract is defined in [Building adapters](adapters.md).
-The current alpha supports runtime registration of executable adapters, a
-built-in MCP stdio adapter, single-turn A2A HTTP+JSON 1.0 agents, and a generic
-HTTP API adapter example. Streaming and multi-turn continuation are not yet
+The current release supports runtime registration of executable adapters, a
+built-in declarative HTTP adapter, an MCP stdio adapter, and single-turn A2A
+HTTP+JSON 1.0 agents. Streaming and multi-turn continuation are not yet
 supported.
 
 The built-in MCP adapter globally admits at most 64 active stdio sessions.
@@ -91,7 +97,8 @@ only when it becomes relevant.
 
 ### Skill projection
 
-Projection materializes one visible Capability as an ordinary Agent Skill:
+MCP, A2A, and custom adapters selectively project one visible Capability as an
+ordinary Agent Skill:
 
 ```text
 ninea-mcp-weather-get-weather/
@@ -108,6 +115,27 @@ paths it does not own.
 Projection is deliberately selective. The Catalog may contain thousands of
 capabilities while an agent's Skill directory contains only the few needed for
 its current work.
+
+A declarative API source is already grouped by domain, so `9a add` projects one
+Skill containing all of its operations and workflows:
+
+```text
+weather/
+  SKILL.md
+  operations/
+    current-weather/
+      schema.json
+      invoke
+  workflows/
+    city-weather/
+      schema.json
+      invoke
+  references/source.yaml
+```
+
+The source and projection location are persisted with the API provider. A
+daemon restart restores the compiled adapter registration without requiring the
+original YAML file to remain at its import path.
 
 ### Runtime, calls, and authorization
 
@@ -207,7 +235,8 @@ NineA does not implement 9P and does not claim that remote actions are files.
 It borrows the namespace principle: adapters hide heterogeneous protocols, and
 operators can project a local, inspectable Skill view for each agent.
 
-In the current alpha, `read` authorization gates search and projection, but the
+For selectively projected capabilities, `read` authorization gates search and
+projection, but the
 result is an ordinary caller-selected directory. NineA does not enforce access
 to those files after projection. Operators that need isolated agent views must
 use separate directories and operating-system permissions.
@@ -228,6 +257,10 @@ Primary references:
    executable adapter contract additionally requires schema shape, lifecycle,
    and message-bound validation before external adapters are accepted.
 5. The Catalog atomically replaces that provider's previous revision.
+
+Declarative API sources replace the first three steps with strict local
+compilation: parse the YAML, validate services, references, hooks, and workflow
+ordering, derive Capabilities, then persist them through the same Catalog.
 
 ### Projection
 

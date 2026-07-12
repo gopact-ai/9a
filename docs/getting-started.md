@@ -1,8 +1,38 @@
 # Getting Started
 
-NineA is currently built from source. It requires Go 1.25.12 or newer and a
-platform with Unix domain sockets. The copy-and-run setup below also uses
-`openssl` to generate a bootstrap token.
+Install the `9a` client and `ninead` daemon on macOS or Linux with Homebrew:
+
+```sh
+brew install gopact-ai/tap/ninea
+```
+
+Building from source requires Go 1.25.12 or newer. NineA currently requires a
+platform with Unix domain sockets. The examples below use `openssl` to generate
+a bootstrap token.
+
+## Add a JSON API as a Skill
+
+After starting the daemon, run this from a project directory:
+
+```sh
+9a validate examples/declarative/open-meteo.yaml
+9a add examples/declarative/open-meteo.yaml
+printf '%s\n' '{"city":"Shanghai"}' | \
+  .agents/skills/weather/workflows/city-weather/invoke
+```
+
+The example combines two public API origins into one `weather` Skill. To update
+or remove it:
+
+```sh
+9a diff examples/declarative/open-meteo.yaml
+9a add examples/declarative/open-meteo.yaml
+9a remove weather
+```
+
+Read [Declarative Skills](declarative-skills.md) for the full YAML contract,
+environment variables, request and response hooks, multi-API workflows,
+security boundaries, and troubleshooting.
 
 ## Run the complete MCP example
 
@@ -59,12 +89,9 @@ accepted only when the database has no tokens. Every later daemon start must
 leave `NINEA_BOOTSTRAP_TOKEN` unset.
 
 ```sh
-mkdir -p "$HOME/.local/state/ninea" "$HOME/.local/bin"
+mkdir -p "$HOME/.local/state/ninea"
 chmod 700 "$HOME/.local/state/ninea"
 umask 077
-go build -o "$HOME/.local/bin/9a" ./cmd/9a
-go build -o "$HOME/.local/bin/ninead" ./cmd/ninead
-export PATH="$HOME/.local/bin:$PATH"
 export NINEA_SOCKET="$HOME/.local/state/ninea/ninea.sock"
 ADMIN_TOKEN_FILE="$HOME/.local/state/ninea/admin-token"
 test -s "$ADMIN_TOKEN_FILE" || openssl rand -hex 32 >"$ADMIN_TOKEN_FILE"
@@ -137,38 +164,26 @@ protocol version 1.0, one input message per NineA invocation, asynchronous Task
 polling, artifacts, and confirmed Task cancellation. It does not expose A2A
 streaming or multi-turn continuation.
 
-### JSON HTTP API through the generic adapter
+### JSON HTTP APIs through declarative YAML
 
-Build the example and copy its manifest:
-
-```sh
-go build -o "$HOME/.local/bin/ninea-http-adapter" ./examples/http-adapter
-mkdir -p "$HOME/.config/ninea"
-cp examples/http-adapter/manifest.example.json \
-  "$HOME/.config/ninea/http-manifest.json"
-```
-
-Edit the manifest, then start `ninead` with the manifest path and any provider
-tokens in its environment. A provider named `orders-api` uses the following
-token variable:
+The built-in API adapter needs no separate executable. A YAML file can define
+multiple services, operations, environment-backed variables, hooks, and
+workflows, then materialize the entire domain as one Skill:
 
 ```sh
-export NINEA_HTTP_ADAPTER_MANIFEST="$HOME/.config/ninea/http-manifest.json"
-export NINEA_HTTP_TOKEN_ORDERS_API='replace-with-provider-token'
+export PLATFORM_API_TOKEN='replace-with-provider-token'
+# Restart ninead from this environment, then:
+9a add examples/declarative/api-bundle.yaml
 ```
 
-Register the executable once under a protocol name, then add providers that use
-that protocol:
+The source, generated Catalog capabilities, and projection location are
+restored from the state database after restart. See the
+[multi-API example](../examples/declarative/api-bundle.yaml) and the complete
+[Declarative Skills manual](declarative-skills.md).
 
-```sh
-9a adapters add httpapi "$HOME/.local/bin/ninea-http-adapter"
-9a providers add httpapi orders-api https://api.example.com
-```
-
-The adapter registry, providers, and discovered Catalog are restored from the
-state database after a clean daemon restart. See the [generic HTTP adapter
-guide](../examples/http-adapter/README.md) for the manifest contract and
-network limits.
+The older [generic HTTP executable adapter](../examples/http-adapter/README.md)
+remains as an example of the custom adapter contract. Prefer declarative YAML
+unless the integration requires custom discovery or runtime semantics.
 
 ## Synchronous and persistent execution
 
@@ -212,6 +227,10 @@ stop that leaves an active record persisted, restore completes that record as
 
 | Command | Purpose | Required access |
 | --- | --- | --- |
+| `9a validate <source.yaml>` | Strictly validate a declarative Skill without contacting the daemon | local file access |
+| `9a add <source.yaml>` | Add or update a declarative API Skill in the current workspace | `admin` |
+| `9a diff <source.yaml>` | Compare a YAML source with its persisted version | `admin` |
+| `9a remove <skill-name>` | Remove a declarative source and its owned projection | `admin` |
 | `9a adapters add <protocol> <absolute-executable>` | Persistently register an executable adapter | `admin` |
 | `9a providers add <protocol> <name> <endpoint>` | Discover and persist a provider | `admin` |
 | `9a tokens create <identity>` | Create a bearer token for an identity | `admin` |

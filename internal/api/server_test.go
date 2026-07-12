@@ -93,7 +93,7 @@ func TestNonAdminTokenCannotUseAdministrativeActions(t *testing.T) {
 	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
 	}}
-	requests := []Request{{Action: "acl.grant", Identity: "agent", Capability: "x", Permissions: []string{"invoke"}}, {Action: "adapter.add", Protocol: "evil", Executable: "/bin/true"}, {Action: "provider.add", Protocol: "mcp", Name: "evil", Endpoint: "stdio:/bin/true"}, {Action: "token.create", Identity: "attacker"}}
+	requests := []Request{{Action: "acl.grant", Identity: "agent", Capability: "x", Permissions: []string{"invoke"}}, {Action: "adapter.add", Protocol: "evil", Executable: "/bin/true"}, {Action: "provider.add", Protocol: "mcp", Name: "evil", Endpoint: "stdio:/bin/true"}, {Action: "declarative.add", Source: "invalid", Root: t.TempDir()}, {Action: "declarative.diff", Source: "invalid"}, {Action: "declarative.remove", Name: "weather"}, {Action: "token.create", Identity: "attacker"}}
 	for _, bodyRequest := range requests {
 		bodyRequest := bodyRequest
 		t.Run(bodyRequest.Action, func(t *testing.T) {

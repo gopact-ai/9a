@@ -8,6 +8,7 @@ import (
 	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/app"
 	callmodel "github.com/gopact-ai/9a/internal/call"
+	"github.com/gopact-ai/9a/internal/declarative"
 	"github.com/gopact-ai/9a/internal/provider"
 	"github.com/gopact-ai/9a/internal/search"
 	"net"
@@ -33,6 +34,7 @@ type Request struct {
 	Format      string          `json:"format,omitempty"`
 	Root        string          `json:"root,omitempty"`
 	Input       json.RawMessage `json:"input,omitempty"`
+	Source      string          `json:"source,omitempty"`
 }
 type Response struct {
 	Data  any    `json:"data,omitempty"`
@@ -78,7 +80,7 @@ func Listen(socket string, a *app.App) (*Server, error) {
 			_ = json.NewEncoder(w).Encode(Response{Error: "authentication failed", Code: "unauthorized"})
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, callmodel.MaxPayloadBytes+(64<<10))
+		r.Body = http.MaxBytesReader(w, r.Body, declarative.MaxSourceBytes*2+(64<<10))
 		var q Request
 		if json.NewDecoder(r.Body).Decode(&q) != nil {
 			w.WriteHeader(400)
@@ -102,6 +104,24 @@ func Listen(socket string, a *app.App) (*Server, error) {
 			}
 			p := provider.Provider{ID: q.Protocol + "/" + q.Name, Protocol: q.Protocol, Name: q.Name, Endpoint: q.Endpoint}
 			err = a.AddProvider(ctx, p)
+		case "declarative.add":
+			if !a.IsAdmin(ctx, identity) {
+				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))
+				return
+			}
+			data, err = a.AddDeclarative(ctx, identity, []byte(q.Source), q.Root)
+		case "declarative.diff":
+			if !a.IsAdmin(ctx, identity) {
+				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))
+				return
+			}
+			data, err = a.DiffDeclarative(ctx, []byte(q.Source))
+		case "declarative.remove":
+			if !a.IsAdmin(ctx, identity) {
+				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))
+				return
+			}
+			err = a.RemoveDeclarative(ctx, identity, q.Name)
 		case "acl.grant":
 			if !a.IsAdmin(ctx, identity) {
 				writeError(w, http.StatusForbidden, "permission_denied", errors.New("admin permission required"))

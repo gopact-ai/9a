@@ -46,6 +46,11 @@ secret store:
   `NINEA_HTTP_TOKEN_ORDERS_API` for manifest operations configured with
   `"auth":"bearer"`.
 
+Declarative Skills name environment variables under `variables` and resolve
+them only at invocation time. Templates such as `{{ vars.api-token }}` can set
+service or request headers without embedding the value in YAML. The projected
+`references/source.yaml` retains the environment variable name, not its value.
+
 The generic HTTP adapter never sends an available token for an operation marked
 `none`, and it does not forward caller headers. Do not put credentials in
 provider descriptions, manifests committed to source control, Capability
@@ -72,8 +77,8 @@ records `failed` with code `resource_exhausted`.
 
 ## Network boundaries
 
-The built-in A2A adapter and generic HTTP adapter apply the following network
-rules:
+The built-in declarative and A2A adapters and the generic HTTP adapter apply the
+following network rules:
 
 - non-loopback providers require HTTPS; cleartext HTTP is limited to loopback
   development endpoints;
@@ -85,6 +90,21 @@ rules:
   bounded; upstream requests use timeouts;
 - returned error messages are sanitized instead of echoing URLs, response
   bodies, or tokens.
+
+Declarative YAML is strictly decoded and rejects unknown fields, duplicate
+keys, aliases, multiple documents, malformed templates, remote cleartext HTTP,
+unsafe paths, invalid references, and oversized source files before
+installation. HTTP response bodies are bounded at 8 MiB.
+
+Declarative executable hooks are disabled by default. Enabling them is an
+explicit source-level trust decision. A hook command is an absolute argument
+array executed without shell interpolation; it receives only allowlisted
+environment variables and bounded JSON over stdin/stdout. NineA caps hook
+timeouts and output, places the process in its own group, and kills that group
+on cancellation or overflow. A global 32-process admission limit rejects excess
+hooks before launch. Hook failures returned through the API do not include
+stderr. Hook code is still trusted code with the daemon user's privileges and
+is not a sandbox.
 
 A2A Agent Card discovery does not send an operation bearer token. The adapter
 accepts compatible public or HTTP Bearer security requirements and applies the

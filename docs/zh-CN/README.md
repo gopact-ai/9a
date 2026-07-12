@@ -2,107 +2,157 @@
 
 [English](../../README.md)
 
-## 将任意能力变成每个 Agent 都能使用的 Skill
+## 把 API、MCP 工具和 A2A Agent 变成所有 Agent 都能使用的 Skill
 
-NineA 将 MCP 工具、A2A Agent 和 JSON HTTP API 转换为文件系统原生的
-Skill，让不同 Agent 都能发现、检查和调用这些能力。
+NineA 是面向 AI Agent 的能力层。它把异构的上游系统转换为文件系统中可检查、可执行
+的 Skills——这正是 Coding Agent 最擅长使用的交互入口。
 
 ```text
-MCP tools ─┐
-A2A agents ├─→ adapters → Catalog → filesystem Skills → any agent
-HTTP APIs ─┘                    │
-                               └─→ authorized command execution
+YAML APIs ─┐
+MCP tools  ├──→ NineA Catalog ──→ 文件系统 Skills ──→ 任意 Agent
+A2A agents ┘          │                    │
+                      └── 本地搜索          └── 显式命令调用
 ```
 
-Agent 已经熟悉两种稳定接口：
+接入一个 JSON API，只需要一个 YAML 文件：
 
-- **文件系统负责发现和上下文**：说明、schema 和来源都是可检查的普通文件；
-- **命令行负责执行**：显式命令把被动读取和经过授权的上游操作分开。
+```yaml
+apiVersion: 9a.dev/v1alpha1
+kind: Skill
+metadata:
+  name: weather
+  description: 查询城市当前天气。
+services:
+  forecast:
+    baseURL: https://api.open-meteo.com
+operations:
+  current-weather:
+    service: forecast
+    method: GET
+    path: /v1/forecast
+    request:
+      query:
+        latitude: "{{ input.latitude }}"
+        longitude: "{{ input.longitude }}"
+        current: temperature_2m
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: .body.current
+```
 
-NineA 不会把完整能力目录塞进 prompt。Agent 先在本地搜索，再只把需要的能力
-投影到自己的 Skill 目录，最后通过生成的脚本调用。Agent 不需要内置 MCP client、
-A2A client、API 凭证或厂商专用工具注册表。
+```sh
+9a validate weather.yaml
+9a add weather.yaml
+printf '%s\n' '{"latitude":31.2,"longitude":121.5}' | \
+  .agents/skills/weather/operations/current-weather/invoke
+```
 
-## 安装
+结果是一个真实可见的 Skill，而不是隐藏在某个产品里的工具注册：
 
-Homebrew 会在 macOS 或 Linux 上同时安装 `9a` client 和 `ninead` daemon：
+```text
+.agents/skills/weather/
+├── SKILL.md
+├── operations/current-weather/
+│   ├── schema.json
+│   └── invoke
+└── references/source.yaml
+```
+
+同一个 YAML 可以描述多个 API 地址、多个 operation 和顺序 workflow，并聚合为一个
+业务域 Skill。变量由 daemon 的环境变量控制；请求前和响应后 hook 可以设置或删除
+header，也可以用内置 jq 调整输入输出。签名等声明式能力无法覆盖的逻辑，可以显式
+启用受超时、环境白名单和输出大小约束的 executable hook。
+
+可以直接查看无需 API Key 的
+[Open-Meteo 示例](../../examples/declarative/open-meteo.yaml)、把三个 API 聚合成一个
+Skill 的 [API bundle 示例](../../examples/declarative/api-bundle.yaml)，以及完整的英文
+[Declarative Skills 手册](../declarative-skills.md)。
+
+## 为什么是文件系统和命令行
+
+AI Agent 已经非常擅长两种稳定接口：
+
+- **文件系统负责发现和上下文**：普通文件里的说明、schema、来源、本地搜索和按需
+  加载；
+- **命令行负责执行**：显式命令清楚地区分“读取一个能力”和“触发上游副作用”。
+
+NineA 不会把全部能力塞进 prompt。Agent 先搜索本地 Catalog，只把当前需要的 Skill
+加载到自己的 namespace，再用 JSON 调用一个小命令。消费方不需要内置 MCP client、
+A2A client、API SDK、凭证处理或厂商专用工具注册表。
+
+这一设计受到 Plan 9 namespace 的启发：adapter 用一组小而统一的接口隐藏异构协议，
+调用方再组装自己所需的视图。NineA 不实现 9P，也不假装远程操作就是文件；文件披露
+能力，命令执行操作。详见英文 [Architecture and Plan 9](../architecture.md)。
+
+## 安装和启动
+
+Homebrew 会在 macOS 或 Linux 上安装 `9a` client 和 `ninead` daemon：
 
 ```sh
 brew install gopact-ai/tap/ninea
 ```
 
-[GitHub Releases](https://github.com/gopact-ai/9a/releases) 同时提供发布归档和
-SHA-256 校验文件。NineA 当前提供 macOS 和 Linux 的 x86-64、ARM64 二进制文件。
+[GitHub Releases](https://github.com/gopact-ai/9a/releases) 提供 macOS 和 Linux 的
+x86-64、ARM64 归档及 SHA-256 校验文件。
 
-## 从能力到 Skill
+第一次启动 daemon 时创建管理员 token：
+
+```sh
+export NINEA_SOCKET="$HOME/.local/state/ninea/ninea.sock"
+export NINEA_TOKEN="$(openssl rand -hex 32)"
+mkdir -p "$(dirname "$NINEA_SOCKET")"
+NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
+  --state "$HOME/.local/state/ninea/ninea.db" \
+  --socket "$NINEA_SOCKET"
+```
+
+后续启动必须取消 `NINEA_BOOTSTRAP_TOKEN`。英文
+[Getting Started](../getting-started.md) 介绍持久化启动、独立 Agent 身份、ACL、MCP、
+A2A 和完整命令参考。
+
+## 三种接入路径
+
+| 上游 | 接入方式 | 适用场景 |
+| --- | --- | --- |
+| JSON HTTP API | 内置声明式 YAML | 单 API、业务域 API 聚合、环境变量、hook 和 workflow |
+| MCP | 内置本地 stdio adapter | 已有 MCP server 和工具发现 |
+| A2A | 内置 HTTP+JSON 1.0 adapter | 已有 Agent、Skill、异步 Task 和取消 |
+| 其他协议 | 语言无关的 `9a.adapter/v1` executable | 自定义发现、流式语义、重试或非 HTTP transport |
+
+MCP、A2A 和自定义 adapter 的能力会进入同一个 Catalog，并可按需投影：
 
 ```sh
 9a search "weather temperature"
 9a project add mcp/weather/get-weather .agents/skills
-printf '%s\n' '{"location":"Shanghai"}' | \
-  .agents/skills/ninea-mcp-weather-get-weather/scripts/invoke
 ```
 
-投影后的 Skill 包含 `SKILL.md`、`schema.json`、有界的上游来源信息和
-`scripts/invoke`。搜索和读取文件都是本地操作，不会访问 provider；真正调用还需要
-独立的 `invoke` 权限。
+## 安全边界
 
-需要脱离单次 CLI 请求持续跟踪的工作，可以启动持久调用：
+NineA 使用 bearer 身份、私有 Unix socket 和默认拒绝的 capability ACL；读取与执行是
+独立权限。远程 API 必须使用 HTTPS，本地 loopback 开发地址除外。YAML 会先经过严格
+校验，凭证只保留环境变量引用。
 
-```sh
-CALL_ID="$(printf '%s\n' '{"location":"Shanghai"}' | \
-  9a calls start mcp/weather/get-weather)"
-9a calls get "$CALL_ID"
-9a calls events "$CALL_ID" --limit 100
-```
+Executable hook、MCP server 和自定义 executable adapter 都是可信本地代码，以
+daemon 用户权限运行。需要更强隔离时，应使用独立操作系统账号或 sandbox。详见英文
+[Security](../SECURITY.md)。
 
-调用状态、结果和可分页事件会保存到 SQLite。只有 capability 明确声明可取消，且
-adapter 能确认取消时，`calls cancel` 才可用。
+## 文档
 
-## 当前已经实现
-
-| 集成 | 当前 Alpha 状态 |
-| --- | --- |
-| MCP 工具 | 内置本地 stdio adapter |
-| A2A Agent | 内置 HTTP+JSON 1.0 adapter；支持单轮 Skill 和异步 Task |
-| JSON HTTP API | manifest 驱动的[通用 HTTP adapter](../../examples/http-adapter/README.md) |
-| 自定义协议 | 可持久注册语言无关的 `9a.adapter/v1` executable adapter |
-| Agent 接口 | 本地搜索、选择性文件系统 Skill 投影、同步与持久异步执行 |
-| 访问控制 | bearer 身份、默认拒绝的 capability ACL、独立 `read` 和 `invoke` 权限 |
-
-Executable adapter 的 wire contract 和注册流程见英文
-[Building adapters](../adapters.md)。
-
-## 为什么采用这种形态
-
-如果没有共同能力层，每个 Agent 都要分别集成每种上游协议，形成 N × M 问题。
-NineA 让上游只需一个 adapter、Agent 只需一种 Skill 格式，并统一负责规范化、本地
-搜索、授权、持久化和路由。
-
-设计受到 Plan 9 namespace 模型启发：把异构资源通过小而一致的接口呈现，并组装到
-调用者选择的 namespace 中，会更容易理解和组合。NineA 不实现 9P，也不把远程操作
-伪装成文件；文件用于披露能力，命令用于执行操作。详见英文
-[Architecture and Plan 9](../architecture.md)。
-
-## 当前边界
-
-NineA 目前是用于本地评估的 Alpha，需要 Unix domain socket。当前不提供 provider
-sandbox、HTTP MCP transport、流式执行、多轮续接或稳定兼容承诺。MCP server 和
-executable adapter 都是受信本地进程，以 daemon 用户的操作系统权限运行。
-
-## 从这里开始
-
-- [Getting started](../getting-started.md)：可复制的 MCP 流程、认证、集成和完整 CLI
-- [Building adapters](../adapters.md)：executable protocol 和 registry
-- [Generic HTTP adapter](../../examples/http-adapter/README.md)：通过 manifest 连接
-  JSON API
+- [Declarative Skills](../declarative-skills.md)：YAML schema、变量、模板、hook、
+  workflow、生命周期和故障排查
+- [声明式示例](../../examples/declarative/README.md)：天气、认证 API、多 API 聚合和
+  executable hook
+- [Getting Started](../getting-started.md)
+- [Building adapters](../adapters.md)
 - [Architecture and Plan 9](../architecture.md)
 - [Security](../SECURITY.md)
 
-运行完整进程级集成测试：
+运行包括进程级 E2E 在内的完整测试：
 
 ```sh
-go test -count=1 ./test/e2e
+go test -count=1 ./...
 ```
 
 NineA 使用 [MIT License](../../LICENSE)。
