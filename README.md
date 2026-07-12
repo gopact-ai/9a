@@ -2,7 +2,7 @@
 
 [简体中文](docs/zh-CN/README.md)
 
-## Turn APIs, MCP tools, and A2A agents into Skills every agent can use
+## 🚀 Turn APIs, MCP tools, and A2A agents into Skills every agent can use
 
 NineA is a capability layer for AI agents. It turns heterogeneous upstream
 systems into inspectable, executable Skills on the local filesystem—the
@@ -71,7 +71,7 @@ See the runnable [Open-Meteo example](examples/declarative/open-meteo.yaml),
 the [multi-API bundle](examples/declarative/api-bundle.yaml), and the complete
 [Declarative Skills manual](docs/declarative-skills.md).
 
-## Why files and commands
+## 🧭 Why files and commands
 
 AI agents are already excellent at two durable interfaces:
 
@@ -91,7 +91,7 @@ each caller assembles the view it needs. NineA does not implement 9P and does
 not pretend remote actions are files. Files disclose capabilities; commands
 perform actions. Read [Architecture and Plan 9](docs/architecture.md).
 
-## Install
+## 📦 Install
 
 Homebrew installs the `9a` client and `ninead` daemon on macOS or Linux:
 
@@ -117,7 +117,7 @@ Leave `NINEA_BOOTSTRAP_TOKEN` unset on later starts. The
 [Getting Started guide](docs/getting-started.md) covers persistent startup,
 separate agent identities, ACLs, MCP, A2A, and the complete command reference.
 
-## Three integration paths
+## 🔌 Three integration paths
 
 | Upstream | Integration path | Best for |
 | --- | --- | --- |
@@ -146,7 +146,7 @@ CALL_ID="$(printf '%s\n' '{"location":"Shanghai"}' | \
 9a calls events "$CALL_ID" --limit 100
 ```
 
-## Security boundaries
+## 🔒 Security boundaries
 
 NineA uses bearer identities, a private Unix socket, and default-deny
 capability ACLs. Reading and invocation are separate permissions. Remote API
@@ -158,7 +158,7 @@ code running with the daemon user's privileges. Use a dedicated OS account or
 sandbox when that boundary is not strong enough. Read the complete
 [Security guide](docs/SECURITY.md).
 
-## Documentation
+## 📚 Documentation
 
 - [Declarative Skills](docs/declarative-skills.md)—YAML schema, variables,
   templates, hooks, workflows, lifecycle, and troubleshooting
