@@ -312,6 +312,11 @@ stop that leaves an active record persisted, restore completes that record as
 
 ## Command reference
 
+Run `9a --help` for the grouped command overview and
+`9a help <command> [subcommand]` for complete positional arguments, flags, and
+examples. `9a completion <shell>` generates completion for bash, zsh, fish, or
+powershell.
+
 | Command | Purpose | Required access |
 | --- | --- | --- |
 | `9a validate <source.yaml>` | Strictly validate a declarative Skill without contacting the daemon | local file access |
@@ -321,19 +326,21 @@ stop that leaves an active record persisted, restore completes that record as
 | `9a adapters add <protocol> <absolute-executable>` | Persistently register an executable adapter | `admin` |
 | `9a providers add <protocol> <name> <endpoint>` | Discover and persist a provider | `admin` |
 | `9a providers remove <protocol> <name>` | Remove a provider and its managed views | `admin` |
-| `9a attach [--backend auto\|fuse\|directory]` | Attach the built-in Skill and workspace view | authenticated identity |
-| `9a status [--json]` | Inspect backend, fallback, and managed Skills | authenticated identity |
-| `9a update [--check] [--all]` | Rediscover providers and reconcile managed views | `admin` |
-| `9a detach` | Remove only this workspace's managed view | authenticated identity |
+| `9a attach [--workspace PATH] [--backend auto\|fuse\|directory]` | Attach the built-in Skill and workspace view | authenticated identity |
+| `9a status [--workspace PATH] [--json]` | Inspect backend, fallback, and managed Skills | authenticated identity |
+| `9a update [--workspace PATH] [--check\|--all]` | Rediscover providers and reconcile managed views | `admin` |
+| `9a detach [--workspace PATH]` | Remove only this workspace's managed view | authenticated identity |
 | `9a tokens create <identity>` | Create a bearer token for an identity | `admin` |
 | `9a acl grant <identity> <capability> <permissions>` | Grant comma-separated permissions | `admin` |
-| `9a search <query>` | Search visible capabilities as JSON | capability `read` |
+| `9a search <query...> [--format json]` | Search visible capabilities as JSON; unquoted words are joined | capability `read` |
 | `9a project add <capability> <skills-root>` | Materialize one filesystem Skill | capability `read` |
 | `9a invoke <capability>` | Read up to 8 MiB of JSON and wait with a 30-second CLI timeout | capability `invoke` |
 | `9a calls start <capability>` | Persist up to 8 MiB of JSON and start an asynchronous call | capability `invoke` |
 | `9a calls get <call-id>` | Read call state and terminal result | call owner or `admin` |
 | `9a calls events <call-id> [--after N] [--limit N]` | Read a persistent event page | call owner or `admin` |
 | `9a calls cancel <call-id>` | Request confirmed cancellation | call owner or `admin` |
+| `9a completion <bash\|zsh\|fish\|powershell>` | Generate shell completion on stdout | local execution |
+| `9a version` or `9a --version` | Print the embedded client version | local execution |
 
 ## Common failures
 

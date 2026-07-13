@@ -109,6 +109,15 @@ Upgrade both commands with:
 brew upgrade gopact-ai/tap/ninea
 ```
 
+Confirm which client Homebrew placed on `PATH`, and explore complete command
+arguments without starting the daemon:
+
+```sh
+9a version
+9a --help
+9a help calls events
+```
+
 After upgrading, restart `ninead` with the same state database and socket, then
 run `9a update --check` and `9a update` to refresh the built-in Skill and the
 current workspace's managed views. Use `9a update --all` only when every

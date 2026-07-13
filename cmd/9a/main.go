@@ -4,22 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
+	"errors"
 	"fmt"
-	"github.com/gopact-ai/9a/internal/api"
-	callmodel "github.com/gopact-ai/9a/internal/call"
-	"github.com/gopact-ai/9a/internal/declarative"
-	workspacepkg "github.com/gopact-ai/9a/internal/workspace"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/gopact-ai/9a/internal/api"
+	callmodel "github.com/gopact-ai/9a/internal/call"
+	"github.com/gopact-ai/9a/internal/declarative"
+	workspacepkg "github.com/gopact-ai/9a/internal/workspace"
 )
 
 type validationResult struct {
@@ -28,29 +26,6 @@ type validationResult struct {
 	Digest       string   `json:"digest"`
 	Capabilities []string `json:"capabilities"`
 }
-
-const usage = `Usage: 9a <command> [arguments]
-
-Commands:
-  attach      Attach the current workspace
-  status      Show workspace status
-  update      Update managed Skills
-  detach      Detach a workspace
-  validate    Validate a declarative Skill file
-  add         Add or replace a declarative Skill
-  diff        Preview declarative Skill changes
-  remove      Remove a declarative Skill
-  calls       Start, inspect, or cancel asynchronous calls
-  adapters    Add an executable adapter
-  providers   Add or remove a provider
-  acl         Grant capability permissions
-  tokens      Create an identity token
-  search      Search capabilities
-  project     Project a capability into a workspace
-  invoke      Invoke a capability with JSON from stdin
-
-Run "9a help", "9a --help", or "9a -h" to show this help.
-`
 
 func readDeclarativeFile(path string) ([]byte, *declarative.Config, error) {
 	file, err := os.Open(path)
@@ -88,11 +63,11 @@ func validateDeclarativeFile(path string) (validationResult, error) {
 	return validationResult{Valid: true, Name: config.Metadata.Name, Digest: config.Digest, Capabilities: capabilities}, nil
 }
 
-func declarativeFileRequest(args []string, cwd string) (api.Request, error) {
-	if len(args) != 2 || (args[0] != "add" && args[0] != "diff") {
-		return api.Request{}, fmt.Errorf("usage: 9a <add|diff> <source.yaml>")
+func declarativeFileRequest(action, path, cwd string) (api.Request, error) {
+	if action != "add" && action != "diff" {
+		return api.Request{}, fmt.Errorf("unsupported declarative action %q", action)
 	}
-	source, _, err := readDeclarativeFile(args[1])
+	source, _, err := readDeclarativeFile(path)
 	if err != nil {
 		return api.Request{}, err
 	}
@@ -100,59 +75,32 @@ func declarativeFileRequest(args []string, cwd string) (api.Request, error) {
 	if err != nil {
 		return api.Request{}, err
 	}
-	return api.Request{Action: "declarative." + args[0], Source: string(source), Root: root}, nil
+	return api.Request{Action: "declarative." + action, Source: string(source), Root: root}, nil
 }
 
-func declarativeRemoveRequest(args []string) (api.Request, error) {
-	if len(args) != 2 || args[0] != "remove" {
-		return api.Request{}, fmt.Errorf("usage: 9a remove <skill-name>")
-	}
-	return api.Request{Action: "declarative.remove", Name: args[1]}, nil
+func declarativeRemoveRequest(name string) api.Request {
+	return api.Request{Action: "declarative.remove", Name: name}
 }
 
-func fail(v ...any) { fmt.Fprintln(os.Stderr, v...); os.Exit(1) }
-
-func workspaceCommandRequest(args []string, cwd string) (api.Request, error) {
-	if len(args) == 0 {
-		return api.Request{}, fmt.Errorf("usage: 9a <attach|status|update|detach> [--workspace <path>] [--backend <auto|fuse|directory>]")
-	}
-	command := args[0]
+func workspaceCommandRequest(command, workspace, backend, cwd string, check, all bool) (api.Request, error) {
 	if command != "attach" && command != "status" && command != "update" && command != "detach" {
-		return api.Request{}, fmt.Errorf("unknown workspace command")
+		return api.Request{}, fmt.Errorf("unsupported workspace command %q", command)
 	}
-	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	explicit := flags.String("workspace", "", "")
-	backend := flags.String("backend", "auto", "")
-	_ = flags.Bool("json", false, "")
-	check := flags.Bool("check", false, "")
-	all := flags.Bool("all", false, "")
-	if err := flags.Parse(args[1:]); err != nil {
-		return api.Request{}, err
-	}
-	if flags.NArg() != 0 {
-		return api.Request{}, fmt.Errorf("unexpected arguments")
-	}
-	if command != "attach" && *backend != "auto" {
+	if command != "attach" && backend != "auto" {
 		return api.Request{}, fmt.Errorf("--backend is only valid with attach")
 	}
-	root, err := workspacepkg.Resolve(*explicit, cwd)
+	root, err := workspacepkg.Resolve(workspace, cwd)
 	if err != nil {
 		return api.Request{}, err
 	}
 	action := map[string]string{"attach": "workspace.attach", "status": "workspace.status", "update": "workspace.update", "detach": "workspace.detach"}[command]
-	if command != "update" && (*check || *all) {
+	if command != "update" && (check || all) {
 		return api.Request{}, fmt.Errorf("--check and --all are only valid with update")
 	}
-	return api.Request{Action: action, Root: root, Backend: *backend, Check: *check, All: *all}, nil
-}
-
-func autoAttach(command string) bool {
-	switch command {
-	case "search", "project", "add", "providers", "adapters", "update":
-		return true
+	if check && all {
+		return api.Request{}, fmt.Errorf("--check and --all are mutually exclusive")
 	}
-	return false
+	return api.Request{Action: action, Root: root, Backend: backend, Check: check, All: all}, nil
 }
 
 func workspaceForProjectionRoot(root string) string {
@@ -164,11 +112,8 @@ func workspaceForProjectionRoot(root string) string {
 	return parent
 }
 
-func adapterAddRequest(args []string) (api.Request, error) {
-	if len(args) != 4 || args[1] != "add" {
-		return api.Request{}, fmt.Errorf("usage: 9a adapters add <protocol> <absolute-executable>")
-	}
-	return api.Request{Action: "adapter.add", Protocol: args[2], Executable: args[3]}, nil
+func adapterAddRequest(protocol, executable string) api.Request {
+	return api.Request{Action: "adapter.add", Protocol: protocol, Executable: executable}
 }
 
 func readInvocationInput(stdin io.Reader) (json.RawMessage, error) {
@@ -182,84 +127,82 @@ func readInvocationInput(stdin io.Reader) (json.RawMessage, error) {
 	if len(bytes.TrimSpace(input)) == 0 {
 		input = []byte("{}")
 	}
+	if !json.Valid(input) {
+		return nil, fmt.Errorf("stdin must contain one valid JSON value")
+	}
 	return input, nil
 }
 
-func invokeRequest(args []string, stdin io.Reader) (api.Request, error) {
-	if len(args) != 2 {
-		return api.Request{}, fmt.Errorf("usage: invoke <capability>")
-	}
+func invokeRequest(capability string, stdin io.Reader) (api.Request, error) {
 	input, err := readInvocationInput(stdin)
 	if err != nil {
 		return api.Request{}, err
 	}
-	return api.Request{Action: "invoke", Capability: args[1], Input: input}, nil
+	return api.Request{Action: "invoke", Capability: capability, Input: input}, nil
 }
 
-func callsRequest(args []string, stdin io.Reader) (api.Request, bool, error) {
-	usage := "usage: 9a calls <start <capability>|get <call-id>|events <call-id> [--after <sequence>] [--limit <count>]|cancel <call-id>>"
-	if len(args) < 3 || (args[1] != "events" && len(args) != 3) {
-		return api.Request{}, false, fmt.Errorf("%s", usage)
-	}
-	switch args[1] {
+func callsRequest(command, target string, stdin io.Reader, after, limit int) (api.Request, bool, error) {
+	switch command {
 	case "start":
 		input, err := readInvocationInput(stdin)
 		if err != nil {
 			return api.Request{}, false, err
 		}
-		return api.Request{Action: "call.start", Capability: args[2], Input: input}, true, nil
+		return api.Request{Action: "call.start", Capability: target, Input: input}, true, nil
 	case "get":
-		return api.Request{Action: "call.get", CallID: args[2]}, false, nil
+		return api.Request{Action: "call.get", CallID: target}, false, nil
 	case "events":
-		request := api.Request{Action: "call.events", CallID: args[2]}
-		if (len(args)-3)%2 != 0 {
-			return api.Request{}, false, fmt.Errorf("%s", usage)
+		if after < 0 {
+			return api.Request{}, false, fmt.Errorf("after sequence must be zero or greater")
 		}
-		seen := map[string]bool{}
-		for i := 3; i < len(args); i += 2 {
-			flag := args[i]
-			value, err := strconv.Atoi(args[i+1])
-			if err != nil || seen[flag] {
-				return api.Request{}, false, fmt.Errorf("%s", usage)
-			}
-			seen[flag] = true
-			switch flag {
-			case "--after":
-				if value < 0 {
-					return api.Request{}, false, fmt.Errorf("%s", usage)
-				}
-				request.After = value
-			case "--limit":
-				if value <= 0 {
-					return api.Request{}, false, fmt.Errorf("%s", usage)
-				}
-				request.Limit = value
-			default:
-				return api.Request{}, false, fmt.Errorf("%s", usage)
-			}
+		if limit < 0 {
+			return api.Request{}, false, fmt.Errorf("event limit must be zero or greater")
 		}
-		return request, false, nil
+		return api.Request{Action: "call.events", CallID: target, After: after, Limit: limit}, false, nil
 	case "cancel":
-		return api.Request{Action: "call.cancel", CallID: args[2]}, false, nil
+		return api.Request{Action: "call.cancel", CallID: target}, false, nil
 	default:
-		return api.Request{}, false, fmt.Errorf("%s", usage)
+		return api.Request{}, false, fmt.Errorf("unsupported calls command %q", command)
 	}
 }
 
-func call(q api.Request) json.RawMessage {
+type rpcError struct {
+	code    string
+	message string
+	data    json.RawMessage
+}
+
+func (e *rpcError) Error() string {
+	if e.code == "" {
+		return e.message
+	}
+	if e.message == "" {
+		return e.code
+	}
+	return e.code + ": " + e.message
+}
+
+func callRPC(q api.Request) (json.RawMessage, error) {
 	socket := os.Getenv("NINEA_SOCKET")
 	if socket == "" {
 		socket = "/tmp/ninea.sock"
 	}
-	body, _ := json.Marshal(q)
-	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	body, err := json.Marshal(q)
+	if err != nil {
+		return nil, err
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
 	}}
-	req, _ := http.NewRequest("POST", "http://unix/rpc", bytes.NewReader(body))
+	defer transport.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://unix/rpc", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+os.Getenv("NINEA_TOKEN"))
-	resp, e := (&http.Client{Transport: tr, Timeout: 30 * time.Second}).Do(req)
-	if e != nil {
-		fail(e)
+	resp, err := (&http.Client{Transport: transport, Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -267,146 +210,35 @@ func call(q api.Request) json.RawMessage {
 		Error string          `json:"error"`
 		Code  string          `json:"code"`
 	}
-	if e = json.NewDecoder(resp.Body).Decode(&out); e != nil {
-		fail(e)
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
 	}
-	if resp.StatusCode >= 300 || out.Error != "" {
-		if len(out.Data) > 0 && string(out.Data) != "null" {
-			_, _ = os.Stderr.Write(out.Data)
+	if resp.StatusCode >= http.StatusMultipleChoices || out.Error != "" {
+		if out.Error == "" {
+			out.Error = resp.Status
+		}
+		return nil, &rpcError{code: out.Code, message: out.Error, data: out.Data}
+	}
+	return out.Data, nil
+}
+
+func main() {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+	root := newRootCommand(newCLI(cwd))
+	root.SetIn(os.Stdin)
+	root.SetOut(os.Stdout)
+	root.SetErr(os.Stderr)
+	if _, err := root.ExecuteC(); err != nil {
+		var remote *rpcError
+		if errors.As(err, &remote) && len(remote.data) > 0 && string(remote.data) != "null" {
+			_, _ = os.Stderr.Write(remote.data)
 			_, _ = os.Stderr.Write([]byte("\n"))
 		}
-		fail(out.Code + ": " + out.Error)
-	}
-	return out.Data
-}
-func main() {
-	a := os.Args[1:]
-	if len(a) == 0 {
-		fail("usage: 9a <command>")
-	}
-	if len(a) == 1 && (a[0] == "help" || a[0] == "--help" || a[0] == "-h") {
-		fmt.Print(usage)
-		return
-	}
-	var q api.Request
-	plainString := false
-	cwd, cwdErr := os.Getwd()
-	if cwdErr != nil {
-		fail(cwdErr)
-	}
-	skipAttach := (a[0] == "update" && (slices.Contains(a, "--check") || slices.Contains(a, "--all"))) || (a[0] == "providers" && len(a) > 1 && a[1] == "remove")
-	if autoAttach(a[0]) && !skipAttach && os.Getenv("NINEA_AUTO_ATTACH") != "0" {
-		root, err := workspacepkg.Resolve("", cwd)
-		if err != nil {
-			fail(err)
-		}
-		_ = call(api.Request{Action: "workspace.attach", Root: root, Backend: "auto"})
-	}
-	switch a[0] {
-	case "attach", "status", "update", "detach":
-		request, err := workspaceCommandRequest(a, cwd)
-		if err != nil {
-			fail(err)
-		}
-		q = request
-	case "validate":
-		if len(a) != 2 {
-			fail("usage: 9a validate <source.yaml>")
-		}
-		result, err := validateDeclarativeFile(a[1])
-		if err != nil {
-			fail(err)
-		}
-		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
-			fail(err)
-		}
-		return
-	case "add", "diff":
-		request, err := declarativeFileRequest(a, cwd)
-		if err != nil {
-			fail(err)
-		}
-		q = request
-	case "remove":
-		request, err := declarativeRemoveRequest(a)
-		if err != nil {
-			fail(err)
-		}
-		q = request
-	case "calls":
-		request, plain, err := callsRequest(a, os.Stdin)
-		if err != nil {
-			fail(err)
-		}
-		q = request
-		plainString = plain
-	case "adapters":
-		request, err := adapterAddRequest(a)
-		if err != nil {
-			fail(err)
-		}
-		q = request
-	case "providers":
-		if len(a) == 4 && a[1] == "remove" {
-			q = api.Request{Action: "provider.remove", Protocol: a[2], Name: a[3]}
-			break
-		}
-		if len(a) != 5 || a[1] != "add" {
-			fail("usage: providers <add <protocol> <name> <endpoint>|remove <protocol> <name>>")
-		}
-		q = api.Request{Action: "provider.add", Protocol: a[2], Name: a[3], Endpoint: a[4]}
-	case "acl":
-		if len(a) != 5 || a[1] != "grant" {
-			fail("usage: acl grant <identity> <capability> <permissions>")
-		}
-		q = api.Request{Action: "acl.grant", Identity: a[2], Capability: a[3], Permissions: strings.Split(a[4], ",")}
-	case "tokens":
-		if len(a) != 3 || a[1] != "create" {
-			fail("usage: tokens create <identity>")
-		}
-		q = api.Request{Action: "token.create", Identity: a[2]}
-		plainString = true
-	case "search":
-		if len(a) < 2 {
-			fail("usage: search <query>")
-		}
-		q = api.Request{Action: "search", Query: a[1]}
-	case "project":
-		if len(a) != 4 || a[1] != "add" {
-			fail("usage: project add <capability> <root>")
-		}
-		root, err := filepath.Abs(a[3])
-		if err != nil {
-			fail(err)
-		}
-		workspaceRoot, err := workspacepkg.Resolve("", cwd)
-		if err != nil {
-			fail(err)
-		}
-		if os.Getenv("NINEA_AUTO_ATTACH") == "0" {
-			workspaceRoot = workspaceForProjectionRoot(root)
-		}
-		q = api.Request{Action: "project.add", Capability: a[2], Workspace: workspaceRoot, Root: root}
-	case "invoke":
-		request, err := invokeRequest(a, os.Stdin)
-		if err != nil {
-			fail(err)
-		}
-		q = request
-	default:
-		fail("unknown command")
-	}
-	data := call(q)
-	if plainString {
-		var value string
-		if err := json.Unmarshal(data, &value); err != nil {
-			fail(err)
-		}
-		fmt.Fprintln(os.Stdout, value)
-		return
-	}
-	if len(data) > 0 && string(data) != "null" {
-		_, _ = os.Stdout.Write(data)
-		_, _ = os.Stdout.Write([]byte("\n"))
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
 	}
 }
