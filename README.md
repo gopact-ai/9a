@@ -119,9 +119,10 @@ arguments without starting the daemon:
 ```
 
 After upgrading, restart a Homebrew-managed service with
-`brew services restart ninea`, then run `9a update --check` and `9a update` to
-refresh the built-in Skill and the current workspace's managed views. Use
-`9a update --all` only when every attached workspace should be reconciled. See
+`brew services restart gopact-ai/tap/ninea`, then run `9a update --check` and
+`9a update` to refresh the built-in Skill and the current workspace's managed
+views. Use `9a update --all` only when every attached workspace should be
+reconciled. See
 [Upgrade NineA](docs/getting-started.md#upgrade-ninea) for the safe sequence and
 the distinction between a software upgrade and a workspace update.
 

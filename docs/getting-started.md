@@ -77,7 +77,7 @@ Use this sequence:
 ```sh
 brew update
 brew upgrade gopact-ai/tap/ninea
-brew services restart ninea # only when using the Homebrew service
+brew services restart gopact-ai/tap/ninea # only when using the Homebrew service
 
 9a update --check
 9a update
@@ -186,7 +186,7 @@ automatically reads the local socket and token. `NINEA_SOCKET` and
 For a login-independent process, use the Homebrew service:
 
 ```sh
-brew services start ninea
+brew services start gopact-ai/tap/ninea
 ```
 
 `9a daemon --help` documents the foreground service entry point and its

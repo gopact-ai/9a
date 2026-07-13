@@ -113,9 +113,10 @@ brew upgrade gopact-ai/tap/ninea
 9a help calls events
 ```
 
-升级后，使用 Homebrew service 的用户执行 `brew services restart ninea`，再执行
-`9a update --check` 预览变化，执行 `9a update` 刷新内置 Skill 和当前 workspace 的
-托管视图。软件升级与 workspace 更新的完整区别见英文
+升级后，使用 Homebrew service 的用户执行
+`brew services restart gopact-ai/tap/ninea`，再执行 `9a update --check` 预览变化，
+执行 `9a update` 刷新内置 Skill 和当前 workspace 的托管视图。软件升级与
+workspace 更新的完整区别见英文
 [Upgrade NineA](../getting-started.md#upgrade-ninea)。
 
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) 提供 macOS 和 Linux 的
