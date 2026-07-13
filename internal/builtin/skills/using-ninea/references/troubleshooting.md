@@ -23,7 +23,7 @@ Do not confuse a software upgrade with a workspace update:
 ```sh
 brew update
 brew upgrade gopact-ai/tap/ninea
-brew services restart ninea # only when using the Homebrew service
+brew services restart gopact-ai/tap/ninea # only when using the Homebrew service
 9a update --check
 9a update
 9a status --json
