@@ -29,6 +29,29 @@ type validationResult struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+const usage = `Usage: 9a <command> [arguments]
+
+Commands:
+  attach      Attach the current workspace
+  status      Show workspace status
+  update      Update managed Skills
+  detach      Detach a workspace
+  validate    Validate a declarative Skill file
+  add         Add or replace a declarative Skill
+  diff        Preview declarative Skill changes
+  remove      Remove a declarative Skill
+  calls       Start, inspect, or cancel asynchronous calls
+  adapters    Add an executable adapter
+  providers   Add or remove a provider
+  acl         Grant capability permissions
+  tokens      Create an identity token
+  search      Search capabilities
+  project     Project a capability into a workspace
+  invoke      Invoke a capability with JSON from stdin
+
+Run "9a help", "9a --help", or "9a -h" to show this help.
+`
+
 func readDeclarativeFile(path string) ([]byte, *declarative.Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -260,6 +283,10 @@ func main() {
 	a := os.Args[1:]
 	if len(a) == 0 {
 		fail("usage: 9a <command>")
+	}
+	if len(a) == 1 && (a[0] == "help" || a[0] == "--help" || a[0] == "-h") {
+		fmt.Print(usage)
+		return
 	}
 	var q api.Request
 	plainString := false

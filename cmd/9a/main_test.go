@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -180,6 +181,18 @@ func TestWorkspaceForProjectionRoot(t *testing.T) {
 	for root, want := range tests {
 		if got := workspaceForProjectionRoot(root); got != want {
 			t.Fatalf("workspaceForProjectionRoot(%q)=%q want %q", root, got, want)
+		}
+	}
+}
+
+func TestHelpListsCommandsWithoutDaemon(t *testing.T) {
+	out, err := exec.Command("go", "run", ".", "help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("9a help: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Usage: 9a <command>", "attach", "validate", "invoke"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Fatalf("9a help output missing %q:\n%s", want, out)
 		}
 	}
 }
