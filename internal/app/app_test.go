@@ -59,3 +59,35 @@ func TestGrantRejectsInvalidInputBeforePersisting(t *testing.T) {
 		t.Fatalf("invalid grants persisted %d ACL rows", count)
 	}
 }
+
+func TestGrantRollsBackAllPermissionsWhenOneInsertFails(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TRIGGER reject_invoke_permission
+		BEFORE INSERT ON acl
+		WHEN NEW.permission = 'invoke'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected ACL write failure');
+		END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(db)
+	if err := a.Grant(ctx, "agent", "echo/demo/echo", []string{"read", "invoke"}); err == nil {
+		t.Fatal("Grant succeeded despite injected ACL write failure")
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM acl`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed grant persisted %d ACL rows", count)
+	}
+}

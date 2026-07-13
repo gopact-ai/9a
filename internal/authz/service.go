@@ -47,6 +47,30 @@ func (s *Service) Grant(ctx context.Context, identity, capability string, permis
 	_, err := s.GrantIfAbsent(ctx, identity, capability, permission)
 	return err
 }
+
+func (s *Service) GrantAll(ctx context.Context, identity, capability string, permissions []Permission) error {
+	if len(permissions) == 0 {
+		return fmt.Errorf("at least one permission is required")
+	}
+	for _, permission := range permissions {
+		if err := validateGrant(identity, capability, permission); err != nil {
+			return err
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, permission := range permissions {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO acl(identity_id,capability_id,permission) VALUES(?,?,?)`, identity, capability, string(permission)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Service) GrantIfAbsent(ctx context.Context, identity, capability string, permission Permission) (bool, error) {
 	if err := validateGrant(identity, capability, permission); err != nil {
 		return false, err

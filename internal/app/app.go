@@ -432,12 +432,7 @@ func (a *App) Grant(ctx context.Context, identity, capID string, permissions []s
 		}
 		parsed[i] = permission
 	}
-	for _, permission := range parsed {
-		if e := a.az.Grant(ctx, identity, capID, permission); e != nil {
-			return e
-		}
-	}
-	return nil
+	return a.az.GrantAll(ctx, identity, capID, parsed)
 }
 func (a *App) Search(ctx context.Context, identity string, q search.Query) ([]search.Result, error) {
 	return a.search.Search(ctx, identity, q)
