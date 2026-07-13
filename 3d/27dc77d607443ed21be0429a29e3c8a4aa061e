@@ -1,0 +1,73 @@
+internal/workspace/resolve_test.go
+  s_90a636a9ddfd26::t_3a7fe33dbe3ade 80-83
+  s_90a636a9ddfd26::t_6d6e0bfdc5550f 75-78
+  s_90a636a9ddfd26::t_d407fa8e1b1992 96-98,116,120,123
+  s_90a636a9ddfd26::t_b6560cef8d641e 106
+  s_90a636a9ddfd26::t_12e7f9c86e6e3f 93-94,111
+  s_90a636a9ddfd26::t_8df5c97f211ce2 53-69,74,79,84-85,92,95,99,104-105,112,117,121,124,129-130
+  s_90a636a9ddfd26::t_3619fb0707c906 70-73
+  s_90a636a9ddfd26::t_889d92b805e1e7 86-91,108
+  s_90a636a9ddfd26::t_e2eeb84c1b2077 100-103,125,127-128
+  s_90a636a9ddfd26::t_b95393338f01d0 107
+  s_90a636a9ddfd26::t_1ad33fd80cb966 109-110
+  s_90a636a9ddfd26::t_287b80cfe04bf4 113-115
+  s_90a636a9ddfd26::t_23c34b4d1faf45 118-119
+  s_90a636a9ddfd26::t_4bb213e3da0bcc 122
+  s_90a636a9ddfd26::t_5b868709462322 126
+  s_90a636a9ddfd26::t_195ec0e40ae75d 131
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_f7ba0ab9968384 145
+  s_90a636a9ddfd26::t_979704448f3ab4 141-143
+README.md
+  s_90a636a9ddfd26::t_8f992eaa2a734f 156
+  s_90a636a9ddfd26::t_e40df203d4219b 151-153
+docs/getting-started.md
+  s_90a636a9ddfd26::t_bc99a847091e6c 50-52
+  s_90a636a9ddfd26::t_4a77957c7ce595 321-324,336,341
+cmd/9a/commands.go
+  s_90a636a9ddfd26::t_a181b3f4b7be55 142,162-163,196,198
+  s_90a636a9ddfd26::t_7093ec67bfa39a 5,60,132-138,280,288,454-456,464,508,511-512,563,581-582,631-633,658-659
+internal/workspace/resolve.go
+  s_90a636a9ddfd26::t_a205b2e261feee 45-48
+  s_90a636a9ddfd26::t_785663eab7f5fc 42-44
+  s_90a636a9ddfd26::t_a669ab9a979f1e 49-51
+  s_90a636a9ddfd26::t_13cb9680db3db3 12,29,34-41,52-53
+cmd/9a/daemon.go
+  s_90a636a9ddfd26::t_fd0a4712f43e3f 367-369
+cmd/9a/output.go
+  s_90a636a9ddfd26::t_f163742cf71931 1-358
+internal/declarative/projection.go
+  s_90a636a9ddfd26::t_e08138a3c21240 79
+internal/generator/generator.go
+  s_90a636a9ddfd26::t_3562867b53f109 39
+internal/generator/generator_test.go
+  s_90a636a9ddfd26::t_7918386a34b86b 39
+test/e2e/a2a_test.go
+  s_90a636a9ddfd26::t_0b9dd84611faf9 141,157,178
+test/e2e/calls_test.go
+  s_90a636a9ddfd26::t_572aae346312c0 35,103,116
+test/e2e/declarative_test.go
+  s_90a636a9ddfd26::t_fb2a88d493eb42 102,122,136
+test/e2e/http_adapter_test.go
+  s_90a636a9ddfd26::t_ffddfb64ba24f5 127,137,141,150,163
+test/e2e/mcp_test.go
+  s_90a636a9ddfd26::t_9b797f356ea952 128,134,150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3d27dc77d607443ed21be0429a29e3c8a4aa061e",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
