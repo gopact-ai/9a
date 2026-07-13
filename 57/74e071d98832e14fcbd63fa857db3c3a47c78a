@@ -1,0 +1,27 @@
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_0de40f5908cd53 116-119
+README.md
+  s_90a636a9ddfd26::t_5e22d6b0cc363a 122-125
+docs/getting-started.md
+  s_90a636a9ddfd26::t_68b50831ed5332 80,189
+internal/builtin/skills/using-ninea/references/troubleshooting.md
+  s_90a636a9ddfd26::t_31ef60430d9bb9 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5774e071d98832e14fcbd63fa857db3c3a47c78a",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
