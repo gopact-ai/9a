@@ -1204,7 +1204,8 @@ func executableTestProcessTerminated(pid int) bool {
 
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}

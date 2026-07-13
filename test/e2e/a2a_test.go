@@ -138,7 +138,7 @@ func TestA2ADiscoveryRestoreSyncAsyncCancelAndCLI(t *testing.T) {
 	agentToken := strings.TrimSpace(string(run(t, adminEnv, cli, "", "tokens", "create", "agent")))
 	agentEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
 	run(t, adminEnv, cli, "", "acl", "grant", "agent", "a2a/research-agent/summarize", "read,invoke")
-	search := run(t, agentEnv, cli, "", "search", "summarize", "--format", "json")
+	search := run(t, agentEnv, cli, "", "search", "summarize", "--json")
 	var results []map[string]any
 	if err := json.Unmarshal(search, &results); err != nil || len(results) != 1 {
 		t.Fatalf("search=%s err=%v", search, err)
@@ -154,7 +154,7 @@ func TestA2ADiscoveryRestoreSyncAsyncCancelAndCLI(t *testing.T) {
 	_ = d.Wait()
 	_ = os.Remove(socket)
 	d = startDaemon(false)
-	out := run(t, agentEnv, cli, `{"parts":[{"text":"direct"}]}`, "invoke", "a2a/research-agent/summarize")
+	out := run(t, agentEnv, cli, `{"parts":[{"text":"direct"}]}`, "invoke", "a2a/research-agent/summarize", "--json")
 	var message map[string]any
 	if err := json.Unmarshal(out, &message); err != nil || message["messageId"] != "a2a-response" || message["contextId"] != "direct-context" {
 		t.Fatalf("invoke=%s err=%v", out, err)
@@ -175,7 +175,7 @@ func TestA2ADiscoveryRestoreSyncAsyncCancelAndCLI(t *testing.T) {
 	var envelopes []json.RawMessage
 	after := 0
 	for {
-		args := []string{"calls", "events", completedID, "--limit", "2"}
+		args := []string{"calls", "events", completedID, "--limit", "2", "--json"}
 		if after != 0 {
 			args = append(args, "--after", strconv.Itoa(after))
 		}

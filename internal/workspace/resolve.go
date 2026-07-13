@@ -9,7 +9,7 @@ import (
 )
 
 // Resolve returns the canonical workspace directory. An explicit path wins;
-// otherwise the enclosing Git worktree is used when one exists.
+// otherwise a managed Skills tree selects its owner before Git discovery.
 func Resolve(explicit, cwd string) (string, error) {
 	path := explicit
 	if path == "" {
@@ -26,16 +26,31 @@ func Resolve(explicit, cwd string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	canonical, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace: %w", err)
-	}
-	info, err := os.Stat(canonical)
+	info, err := os.Stat(abs)
 	if err != nil {
 		return "", fmt.Errorf("stat workspace: %w", err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("workspace is not a directory: %s", canonical)
+		return "", fmt.Errorf("workspace is not a directory: %s", abs)
+	}
+	if explicit == "" {
+		for path := filepath.Clean(abs); ; path = filepath.Dir(path) {
+			parent := filepath.Dir(path)
+			if filepath.Base(path) == "skills" && (filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".claude") {
+				owner, resolveErr := filepath.EvalSymlinks(filepath.Dir(parent))
+				if resolveErr != nil {
+					return "", fmt.Errorf("resolve workspace: %w", resolveErr)
+				}
+				return filepath.Clean(owner), nil
+			}
+			if parent == path {
+				break
+			}
+		}
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace: %w", err)
 	}
 	if explicit != "" {
 		return filepath.Clean(canonical), nil

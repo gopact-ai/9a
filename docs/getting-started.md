@@ -47,9 +47,9 @@ Start from a project directory:
 ```
 
 Workspace roots are resolved in the client: `--workspace` wins, then the
-enclosing Git worktree, then the current directory. Absolute canonical paths
-are sent to the local daemon, so its working directory never changes the
-projection destination.
+enclosing Git worktree, then the current directory. Running from inside
+`.agents/skills` or `.claude/skills` selects the directory that owns that
+Skills root. Absolute canonical paths are sent to the local daemon.
 
 NineA uses FUSE when available (`/dev/fuse` on Linux or macFUSE on macOS) and
 falls back to integrity-checked read-only files. Select explicitly with
@@ -156,7 +156,7 @@ AGENT_TOKEN="$(9a tokens create demo-agent)"
 9a acl grant demo-agent mcp/weather/get-weather read,invoke
 export NINEA_TOKEN="$AGENT_TOKEN"
 
-9a search "weather temperature" | grep -o 'mcp/weather/get-weather'
+9a search "weather temperature" --json | grep -o 'mcp/weather/get-weather'
 9a project add mcp/weather/get-weather "$DEMO_DIR/skills"
 find "$DEMO_DIR/skills/ninea-mcp-weather-get-weather" -maxdepth 2 -type f
 printf '%s\n' '{"location":"Shanghai"}' | \
@@ -318,7 +318,10 @@ stop that leaves an active record persisted, restore completes that record as
 Run `9a --help` for the grouped command overview and
 `9a help <command> [subcommand]` for complete positional arguments, flags, and
 examples. `9a completion <shell>` generates completion for bash, zsh, fish, or
-powershell.
+powershell. Commands print concise human-readable output by default. Add the
+global `--json` flag to any data command for stable machine-readable output;
+successful commands without response data return `{"ok":true}`. Token creation
+and asynchronous call start keep their useful plain scalar output by default.
 
 | Command | Purpose | Required access |
 | --- | --- | --- |
@@ -330,12 +333,12 @@ powershell.
 | `9a providers add <protocol> <name> <endpoint>` | Discover and persist a provider | `admin` |
 | `9a providers remove <protocol> <name>` | Remove a provider and its managed views | `admin` |
 | `9a attach [--workspace PATH] [--backend auto\|fuse\|directory]` | Attach the built-in Skill and workspace view | authenticated identity |
-| `9a status [--workspace PATH] [--json]` | Inspect backend, fallback, and managed Skills | authenticated identity |
+| `9a status [--workspace PATH]` | Inspect backend, fallback, and managed Skills | authenticated identity |
 | `9a update [--workspace PATH] [--check\|--all]` | Rediscover providers and reconcile managed views | `admin` |
 | `9a detach [--workspace PATH]` | Remove only this workspace's managed view | authenticated identity |
 | `9a tokens create <identity>` | Create a bearer token for an identity | `admin` |
 | `9a acl grant <identity> <capability> <permissions>` | Grant comma-separated `read`, `invoke`, `write`, or `admin` permissions | `admin` |
-| `9a search <query...> [--format json]` | Search visible capabilities as JSON; unquoted words are joined | capability `read` |
+| `9a search <query...>` | Search visible capabilities; unquoted words are joined | capability `read` |
 | `9a project add <capability> <skills-root>` | Materialize one filesystem Skill | capability `read` |
 | `9a invoke <capability>` | Read up to 8 MiB of JSON and wait with a 30-second CLI timeout | capability `invoke` |
 | `9a calls start <capability>` | Persist up to 8 MiB of JSON and start an asynchronous call | capability `invoke` |

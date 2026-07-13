@@ -36,7 +36,7 @@ func TestRenderProducesStandardSkill(t *testing.T) {
 	if string(files["references/upstream.json"]) != string(c.RawMetadata) {
 		t.Fatal("raw metadata changed")
 	}
-	if !strings.Contains(string(files["scripts/invoke"]), "9a invoke") {
+	if !strings.Contains(string(files["scripts/invoke"]), "9a invoke --json") {
 		t.Fatal("missing invoke wrapper")
 	}
 }

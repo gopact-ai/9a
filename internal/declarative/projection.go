@@ -76,7 +76,7 @@ func projectedFiles(config *Config, group, name string, contract projectedContra
 		return nil, err
 	}
 	schema = append(schema, '\n')
-	invoke := fmt.Sprintf("#!/bin/sh\nset -eu\nexec 9a invoke api/%s/%s \"$@\"\n", config.Metadata.Name, name)
+	invoke := fmt.Sprintf("#!/bin/sh\nset -eu\nexec 9a invoke --json api/%s/%s \"$@\"\n", config.Metadata.Name, name)
 	return []mount.File{
 		{Path: group + "/" + name + "/schema.json", Mode: 0o644, Data: schema},
 		{Path: group + "/" + name + "/invoke", Mode: fs.FileMode(0o755), Data: []byte(invoke)},

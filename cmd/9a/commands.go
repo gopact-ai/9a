@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ func newCLI(cwd string) *cli {
 }
 
 func newRootCommand(c *cli) *cobra.Command {
+	var showVersion bool
 	root := &cobra.Command{
 		Use:   "9a",
 		Short: "Expose external capabilities as local, agent-ready Skills",
@@ -46,16 +48,19 @@ for a command. Help, completion, version, and validation do not start it.`,
 		Example: `  9a attach
   9a search "weather forecast"
   printf '%s\n' '{"city":"Shanghai"}' | 9a invoke mcp/weather/forecast`,
-		Version:                    buildinfo.Version,
 		SilenceErrors:              true,
 		SilenceUsage:               true,
 		DisableAutoGenTag:          true,
 		SuggestionsMinimumDistance: 2,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if showVersion {
+				return writeVersionOutput(cmd, buildinfo.Version)
+			}
 			return cmd.Help()
 		},
 	}
-	root.SetVersionTemplate("9a {{.Version}}\n")
+	root.Flags().BoolVar(&showVersion, "version", false, "Print the 9a version")
+	root.PersistentFlags().Bool("json", false, "Print machine-readable JSON instead of human-readable output")
 	root.AddGroup(
 		&cobra.Group{ID: workspaceGroup, Title: "Workspace Commands:"},
 		&cobra.Group{ID: skillGroup, Title: "Skill Commands:"},
@@ -127,24 +132,17 @@ func (c *cli) runRequest(cmd *cobra.Command, request api.Request, plainString bo
 	}
 	data, err := c.call(request)
 	if err != nil {
-		return err
-	}
-	if plainString {
-		var value string
-		if err := json.Unmarshal(data, &value); err != nil {
-			return fmt.Errorf("decode daemon response: %w", err)
+		var remote *rpcError
+		if errors.As(err, &remote) && len(remote.data) > 0 && string(remote.data) != "null" {
+			data = remote.data
+			remote.data = nil
+			if outputErr := writeCommandOutput(cmd, request, data, plainString); outputErr != nil {
+				return errors.Join(err, outputErr)
+			}
 		}
-		_, err := fmt.Fprintln(cmd.OutOrStdout(), value)
 		return err
 	}
-	if len(data) == 0 || string(data) == "null" {
-		return nil
-	}
-	if _, err := cmd.OutOrStdout().Write(data); err != nil {
-		return err
-	}
-	_, err = cmd.OutOrStdout().Write([]byte("\n"))
-	return err
+	return writeCommandOutput(cmd, request, data, plainString)
 }
 
 func (c *cli) runRequestInCurrentWorkspace(cmd *cobra.Command, request api.Request, plainString bool) error {
@@ -164,7 +162,8 @@ func (c *cli) newAttachCommand() *cobra.Command {
 		Long: `Attach the selected workspace and create NineA-managed Skill views.
 
 The workspace defaults to the nearest project root from the current directory.
-The auto backend prefers FUSE and reports a directory fallback in status.`,
+When run inside .agents/skills or .claude/skills, it selects the owning
+workspace. The auto backend prefers FUSE and falls back to a directory view.`,
 		Example: `  9a attach
   9a attach --workspace /work/project --backend directory`,
 		Args: cobra.NoArgs,
@@ -197,9 +196,9 @@ func (c *cli) newStatusCommand() *cobra.Command {
 		Use:     "status",
 		Short:   "Show workspace status",
 		GroupID: workspaceGroup,
-		Long: `Show the selected workspace's backend, fallback reason, and managed Skills.
+		Long: `Show the selected workspace's backend and managed Skills.
 
-Output is JSON. --json is retained so scripts can state the output contract explicitly.`,
+The default is a short human-readable summary. Use --json for full details.`,
 		Example: `  9a status
   9a status --workspace /work/project --json`,
 		Args: cobra.NoArgs,
@@ -212,7 +211,6 @@ Output is JSON. --json is retained so scripts can state the output contract expl
 		},
 	}
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
-	cmd.Flags().Bool("json", false, "Print machine-readable JSON (currently the default)")
 	_ = cmd.MarkFlagDirname("workspace")
 	return cmd
 }
@@ -282,7 +280,7 @@ func (c *cli) newValidateCommand() *cobra.Command {
 		Short:   "Validate a declarative Skill file",
 		GroupID: skillGroup,
 		Long: `Strictly parse a declarative Skill source and print its name, digest, and
-capability IDs as JSON. This command does not contact the daemon or change state.`,
+capability IDs. This command does not contact the daemon or change state.`,
 		Example: "  9a validate examples/declarative/open-meteo.yaml",
 		Args:    exactArgs("<source.yaml>", 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -290,7 +288,7 @@ capability IDs as JSON. This command does not contact the daemon or change state
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			return writeValidationOutput(cmd, result)
 		},
 	}
 }
@@ -452,14 +450,14 @@ func (c *cli) newTokensCommand() *cobra.Command {
 }
 
 func (c *cli) newSearchCommand() *cobra.Command {
-	var format string
+	var legacyFormat string
 	cmd := &cobra.Command{
 		Use:     "search <query...>",
 		Short:   "Search visible capabilities",
 		GroupID: executionGroup,
-		Long:    "Search capabilities visible to the current identity and print matching Catalog entries in the selected format.",
-		Example: `  9a search "weather temperature" --format json
-  9a search weather temperature`,
+		Long:    "Search capabilities visible to the current identity and print concise matching Catalog entries.",
+		Example: `  9a search "weather temperature"
+  9a search weather temperature --json`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("%s requires at least one search term: <query...>", cmd.CommandPath())
@@ -467,18 +465,22 @@ func (c *cli) newSearchCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "json" {
-				return fmt.Errorf("unsupported --format %q: expected json", format)
+			if legacyFormat != "" && legacyFormat != "json" {
+				return fmt.Errorf("unsupported --format %q: expected json", legacyFormat)
 			}
-			request := api.Request{Action: "search", Query: strings.Join(args, " "), Format: format}
+			if legacyFormat == "json" {
+				if err := cmd.Root().PersistentFlags().Set("json", "true"); err != nil {
+					return err
+				}
+			}
+			request := api.Request{Action: "search", Query: strings.Join(args, " "), Format: legacyFormat}
 			return c.runRequestInCurrentWorkspace(cmd, request, false)
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "json", "Output format: json")
-	_ = cmd.RegisterFlagCompletionFunc("format", cobra.FixedCompletions(
-		[]cobra.Completion{"json"},
-		cobra.ShellCompDirectiveNoFileComp,
-	))
+	// Keep the old machine-output spelling working without advertising a
+	// second public format flag or contaminating JSON stdout with a warning.
+	cmd.Flags().StringVar(&legacyFormat, "format", "", "Deprecated output format")
+	_ = cmd.Flags().MarkHidden("format")
 	return cmd
 }
 
@@ -519,10 +521,11 @@ func (c *cli) newInvokeCommand() *cobra.Command {
 		Use:     "invoke <capability>",
 		Short:   "Invoke a capability synchronously",
 		GroupID: executionGroup,
-		Long: `Read JSON from stdin, invoke a capability, and print its JSON result.
+		Long: `Read JSON from stdin, invoke a capability, and print a readable result.
 
 Empty stdin is treated as {}. The CLI waits up to 30 seconds; use "9a calls
-start" for work that must continue after the client exits.`,
+start" for work that must continue after the client exits. Use --json for the
+raw result.`,
 		Example: `  printf '%s\n' '{"city":"Shanghai"}' | 9a invoke mcp/weather/forecast`,
 		Args:    exactArgs("<capability>", 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -573,7 +576,7 @@ func (c *cli) newCallsGetCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "get <call-id>",
 		Short:   "Get asynchronous call state",
-		Long:    "Print the persistent state and terminal result for one call as JSON.",
+		Long:    "Print a readable persistent state and terminal result for one call.",
 		Example: "  9a calls get call_01HXYZ",
 		Args:    exactArgs("<call-id>", 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -591,8 +594,8 @@ func (c *cli) newCallsEventsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "events <call-id>",
 		Short: "List asynchronous call events",
-		Long: `Print one persistent event page as JSON. --after is an exclusive sequence
-cursor; --limit bounds the number of returned events.`,
+		Long: `Print one readable persistent event page. --after is an exclusive sequence
+cursor; --limit bounds the number of returned events. Use --json for the raw page.`,
 		Example: "  9a calls events call_01HXYZ --after 100 --limit 25",
 		Args:    exactArgs("<call-id>", 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -641,6 +644,9 @@ func newCompletionCommand() *cobra.Command {
 		Args:      exactArgs("<shell>", 1),
 		ValidArgs: []cobra.Completion{"bash", "zsh", "fish", "powershell"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if wantsJSON(cmd) {
+				return fmt.Errorf("--json is not supported for completion scripts")
+			}
 			switch args[0] {
 			case "bash":
 				return cmd.Root().GenBashCompletionV2(cmd.OutOrStdout(), true)
@@ -665,8 +671,8 @@ func newVersionCommand() *cobra.Command {
 		Long:    "Print the embedded 9a version. Published binaries receive this value from the release tag.",
 		Example: "  9a version",
 		Args:    cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "9a %s\n", buildinfo.Version)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return writeVersionOutput(cmd, buildinfo.Version)
 		},
 	}
 }
