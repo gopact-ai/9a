@@ -255,6 +255,9 @@ func (a *App) Restore(ctx context.Context) error {
 		if p.ID != expectedID {
 			return fmt.Errorf("persisted provider %q has inconsistent provider id; expected %q", p.ID, expectedID)
 		}
+		if p.Protocol == localSkillProtocol && p.Config["source_kind"] == localSkillProviderKind {
+			continue
+		}
 		if adapters[p.Protocol] == nil {
 			return errors.New("persisted provider uses unsupported protocol: " + p.Protocol)
 		}

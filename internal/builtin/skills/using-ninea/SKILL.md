@@ -9,6 +9,10 @@ Use the filesystem for discovery and commands for execution. Treat every
 9A-managed Skill as read-only; change its YAML or upstream provider instead of
 editing projected files.
 
+`9a search` also indexes user-owned `.agents/skills/<name>/SKILL.md` entries.
+Its automatic attach scans the complete Skill directory before searching, so
+local additions, edits, and removals require no import command.
+
 ## Choose the workflow
 
 - Find or run a capability: use `9a search`, inspect the projected schema, then

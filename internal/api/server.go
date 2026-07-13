@@ -103,7 +103,7 @@ func Listen(socket string, a *app.App) (*Server, error) {
 			}
 			err = a.AddAdapter(ctx, q.Protocol, q.Executable)
 		case "workspace.attach":
-			data, err = a.AttachWorkspace(ctx, q.Root, workspace.BackendPolicy(q.Backend))
+			data, err = a.AttachWorkspace(ctx, identity, q.Root, workspace.BackendPolicy(q.Backend))
 		case "workspace.status":
 			data, err = a.WorkspaceStatus(ctx, q.Root)
 		case "workspace.update":

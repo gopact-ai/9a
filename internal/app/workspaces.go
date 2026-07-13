@@ -9,8 +9,14 @@ import (
 	"github.com/gopact-ai/9a/internal/workspace"
 )
 
-func (a *App) AttachWorkspace(ctx context.Context, root string, policy workspace.BackendPolicy) (projection.Status, error) {
-	return a.projections.Attach(ctx, root, policy)
+func (a *App) AttachWorkspace(ctx context.Context, identity, root string, policy workspace.BackendPolicy) (projection.Status, error) {
+	status, err := a.projections.Attach(ctx, root, policy)
+	if err != nil {
+		return status, err
+	}
+	a.mutation.Lock()
+	defer a.mutation.Unlock()
+	return status, a.syncLocalSkills(ctx, identity, status)
 }
 func (a *App) WorkspaceStatus(ctx context.Context, root string) (projection.Status, error) {
 	status, err := a.projections.Status(ctx, root)
@@ -45,5 +51,16 @@ func (a *App) WorkspaceStatus(ctx context.Context, root string) (projection.Stat
 	return status, nil
 }
 func (a *App) DetachWorkspace(ctx context.Context, root string) error {
+	a.mutation.Lock()
+	defer a.mutation.Unlock()
+	status, err := a.projections.Status(ctx, root)
+	if err != nil {
+		return err
+	}
+	if status.Workspace.State != workspace.StateDetached {
+		if err = a.removeLocalSkills(ctx, status.Workspace); err != nil {
+			return err
+		}
+	}
 	return a.projections.Detach(ctx, root)
 }
