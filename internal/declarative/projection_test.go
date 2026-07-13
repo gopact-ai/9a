@@ -37,6 +37,9 @@ func TestRenderSkillGroupsOperationsAndWorkflows(t *testing.T) {
 		if file.Path == "SKILL.md" && (!strings.Contains(string(file.Data), "current") || !strings.Contains(string(file.Data), "report")) {
 			t.Fatalf("SKILL.md=%s", file.Data)
 		}
+		if strings.HasSuffix(file.Path, "/invoke") && !strings.Contains(string(file.Data), "9a invoke --json") {
+			t.Fatalf("%s does not request machine-readable output: %s", file.Path, file.Data)
+		}
 		delete(want, file.Path)
 	}
 	if len(want) != 0 {

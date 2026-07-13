@@ -148,9 +148,12 @@ From a workspace, the normal agent workflow starts automatically:
 9a status --json
 ```
 
+Commands use concise human-readable output by default. Add the global `--json`
+flag when a script needs stable machine-readable output.
+
 NineA prefers a separate read-only FUSE mount for each managed Skill when the
 platform runtime is available. Otherwise it atomically publishes integrity-
-checked read-only files and reports the fallback reason in `9a status`. It
+checked read-only files and reports the fallback reason in `9a status --json`. It
 never mounts over or replaces user-owned Skills. Use `9a update` to rediscover
 providers and repair views, and `9a detach` to remove only the workspace view.
 

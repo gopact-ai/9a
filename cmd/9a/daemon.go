@@ -364,6 +364,9 @@ func newDaemonCommand(paths localPaths) *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if wantsJSON(cmd) {
+				return fmt.Errorf("--json is not supported by the background daemon")
+			}
 			options.paths = daemonPaths(basePaths, options.state, options.socket)
 			return runDaemon(cmd.Context(), options)
 		},

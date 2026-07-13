@@ -124,7 +124,7 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	for _, capability := range []string{"httpapi/http-api/get-secret", "httpapi/http-api/echo"} {
 		run(t, adminEnv, cli, "", "acl", "grant", "agent", capability, "read,invoke")
 	}
-	search := run(t, agentEnv, cli, "", "search", "API", "--format", "json")
+	search := run(t, agentEnv, cli, "", "search", "API", "--json")
 	if !bytes.Contains(search, []byte("httpapi/http-api/get-secret")) || !bytes.Contains(search, []byte("httpapi/http-api/echo")) {
 		t.Fatalf("search=%s", search)
 	}
@@ -134,11 +134,11 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	if err != nil || !bytes.Contains(projected, []byte("Returns private API data")) {
 		t.Fatalf("projected=%s error=%v", projected, err)
 	}
-	private := run(t, agentEnv, cli, `{"id":"123"}`, "invoke", "httpapi/http-api/get-secret")
+	private := run(t, agentEnv, cli, `{"id":"123"}`, "invoke", "httpapi/http-api/get-secret", "--json")
 	if !bytes.Contains(private, []byte(`"visibility":"private"`)) || !bytes.Contains(private, []byte(`"id":"123"`)) {
 		t.Fatalf("private invoke=%s", private)
 	}
-	public := run(t, agentEnv, cli, `{"message":"hello"}`, "invoke", "httpapi/http-api/echo")
+	public := run(t, agentEnv, cli, `{"message":"hello"}`, "invoke", "httpapi/http-api/echo", "--json")
 	if !bytes.Contains(public, []byte(`"visibility":"public"`)) || !bytes.Contains(public, []byte(`"echo":"hello"`)) {
 		t.Fatalf("public invoke=%s", public)
 	}
@@ -147,7 +147,7 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	if !bytes.Contains(completed.Result, []byte(`"id":"async"`)) {
 		t.Fatalf("async=%#v", completed)
 	}
-	events := run(t, agentEnv, cli, "", "calls", "events", callID, "--limit", "10")
+	events := run(t, agentEnv, cli, "", "calls", "events", callID, "--limit", "10", "--json")
 	if !bytes.Contains(events, []byte(`"type":"result"`)) {
 		t.Fatalf("events=%s", events)
 	}
@@ -160,7 +160,7 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	}
 	_ = os.Remove(socket)
 	d = startDaemon(false)
-	restored := run(t, agentEnv, cli, `{"message":"restored"}`, "invoke", "httpapi/http-api/echo")
+	restored := run(t, agentEnv, cli, `{"message":"restored"}`, "invoke", "httpapi/http-api/echo", "--json")
 	if !bytes.Contains(restored, []byte(`"echo":"restored"`)) {
 		t.Fatalf("restored invoke=%s logs=%s", restored, logs.String())
 	}

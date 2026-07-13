@@ -125,13 +125,13 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 	if out := runFails(t, agentEnv, cli, "", "acl", "grant", "agent", "mcp/weather/get-weather", "invoke"); !bytes.Contains(out, []byte("permission_denied")) {
 		t.Fatalf("self grant=%s", out)
 	}
-	search := run(t, agentEnv, cli, "", "search", "temperature", "--format", "json")
+	search := run(t, agentEnv, cli, "", "search", "temperature", "--json")
 	var results []map[string]any
 	if err := json.Unmarshal(search, &results); err != nil || len(results) != 0 {
 		t.Fatalf("search before grant=%s err=%v", search, err)
 	}
 	run(t, adminEnv, cli, "", "acl", "grant", "agent", "mcp/weather/get-weather", "read")
-	search = run(t, agentEnv, cli, "", "search", "temperature", "--format", "json")
+	search = run(t, agentEnv, cli, "", "search", "temperature", "--json")
 	if err := json.Unmarshal(search, &results); err != nil || len(results) != 1 {
 		t.Fatalf("search=%s err=%v", search, err)
 	}
@@ -147,7 +147,7 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 		t.Fatalf("passive read invoked provider: %s", calls)
 	}
 	run(t, adminEnv, cli, "", "acl", "grant", "agent", "mcp/weather/get-forecast", "read")
-	forecast := run(t, agentEnv, cli, "", "search", "forecast", "--format", "json")
+	forecast := run(t, agentEnv, cli, "", "search", "forecast", "--json")
 	var forecastResults []map[string]any
 	if err := json.Unmarshal(forecast, &forecastResults); err != nil || len(forecastResults) != 1 {
 		t.Fatalf("paginated search=%s err=%v", forecast, err)

@@ -32,7 +32,7 @@ func waitCall(t *testing.T, env []string, cli, id string, states ...string) call
 		wanted[state] = true
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; {
-		out := run(t, env, cli, "", "calls", "get", id)
+		out := run(t, env, cli, "", "calls", "get", id, "--json")
 		var view callView
 		if err := json.Unmarshal(out, &view); err == nil && wanted[view.Call.State] {
 			return view
@@ -100,7 +100,7 @@ func TestExecutableAsyncCallsCLIAndRestartRecovery(t *testing.T) {
 	if string(completed.Result) != `{"ok":true}` {
 		t.Fatalf("completed=%#v", completed)
 	}
-	eventsOut := run(t, agentEnv, cli, "", "calls", "events", completedID, "--limit", "2")
+	eventsOut := run(t, agentEnv, cli, "", "calls", "events", completedID, "--limit", "2", "--json")
 	type eventPageView struct {
 		Events []struct {
 			Sequence int             `json:"sequence"`
@@ -113,7 +113,7 @@ func TestExecutableAsyncCallsCLIAndRestartRecovery(t *testing.T) {
 	if err := json.Unmarshal(eventsOut, &firstEvents); err != nil || len(firstEvents.Events) != 2 || firstEvents.Events[0].Sequence != 1 || !bytes.Contains(firstEvents.Events[1].Envelope, []byte(`"encoding":"base64"`)) || firstEvents.NextAfter != 2 || !firstEvents.HasMore {
 		t.Fatalf("events=%s err=%v", eventsOut, err)
 	}
-	eventsOut = run(t, agentEnv, cli, "", "calls", "events", completedID, "--after", strconv.Itoa(firstEvents.NextAfter), "--limit", "2")
+	eventsOut = run(t, agentEnv, cli, "", "calls", "events", completedID, "--after", strconv.Itoa(firstEvents.NextAfter), "--limit", "2", "--json")
 	var secondEvents eventPageView
 	if err := json.Unmarshal(eventsOut, &secondEvents); err != nil || len(secondEvents.Events) != 1 || secondEvents.Events[0].Sequence != 3 || secondEvents.NextAfter != 3 || secondEvents.HasMore {
 		t.Fatalf("second events=%s err=%v", eventsOut, err)

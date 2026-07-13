@@ -99,7 +99,7 @@ workflows:
 	socket := socketPath(t)
 	token := "declarative-e2e-admin"
 	env := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "CITY_CLIENT=e2e-client", "PATH="+bin+":"+os.Getenv("PATH"))
-	if output := runInDir(t, workspace, env, cli, "", "validate", sourcePath); !bytes.Contains(output, []byte(`"valid":true`)) {
+	if output := runInDir(t, workspace, env, cli, "", "validate", sourcePath, "--json"); !bytes.Contains(output, []byte(`"valid":true`)) {
 		t.Fatalf("validate=%s", output)
 	}
 	state := filepath.Join(root, "state.db")
@@ -119,7 +119,7 @@ workflows:
 	}
 	d := start(true)
 	t.Cleanup(func() { _ = d.Process.Kill(); _ = d.Wait() })
-	added := runInDir(t, workspace, env, cli, "", "add", sourcePath)
+	added := runInDir(t, workspace, env, cli, "", "add", sourcePath, "--json")
 	if !bytes.Contains(added, []byte(`"name":"city-guide"`)) {
 		t.Fatalf("add=%s", added)
 	}
@@ -133,7 +133,7 @@ workflows:
 	if strings.TrimSpace(string(result)) != `{"city":"Shanghai","temperature":26}` {
 		t.Fatalf("workflow=%s", result)
 	}
-	diff := runInDir(t, workspace, env, cli, "", "diff", sourcePath)
+	diff := runInDir(t, workspace, env, cli, "", "diff", sourcePath, "--json")
 	if !bytes.Contains(diff, []byte(`"changed":false`)) {
 		t.Fatalf("diff=%s", diff)
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/gopact-ai/9a/internal/api"
 	callmodel "github.com/gopact-ai/9a/internal/call"
+	"github.com/spf13/cobra"
 )
 
 func TestLocalPathsForHome(t *testing.T) {
@@ -487,6 +488,24 @@ func TestCLIMapsArgumentsToRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	skillsRoot := filepath.Join(canonical, ".agents", "skills")
+	workspaceResponse := json.RawMessage(fmt.Sprintf(
+		`{"workspace":{"root":%q,"skills_root":%q,"backend":"directory","state":"fallback","fallback_reason":"implementation detail"},"skills":[{}]}`,
+		canonical,
+		skillsRoot,
+	))
+	workspaceOutput := func(heading string) string {
+		return fmt.Sprintf("%s %s\n  State: ready\n  Skills: %s (1 managed)\n  Backend: directory (automatic fallback; use --json for details)\n", heading, canonical, skillsRoot)
+	}
+	detachedResponse := json.RawMessage(fmt.Sprintf(
+		`{"workspace":{"root":%q,"state":"detached"},"skills":[]}`,
+		canonical,
+	))
+	degradedResponse := json.RawMessage(fmt.Sprintf(
+		`{"workspace":{"root":%q,"skills_root":%q,"backend":"directory","state":"degraded"},"skills":[{}]}`,
+		canonical,
+		skillsRoot,
+	))
 	tests := []struct {
 		name       string
 		args       []string
@@ -495,11 +514,16 @@ func TestCLIMapsArgumentsToRequests(t *testing.T) {
 		want       api.Request
 		wantStdout string
 	}{
+		{"attach", []string{"attach"}, "", workspaceResponse, api.Request{Action: "workspace.attach", Root: canonical, Backend: "auto"}, workspaceOutput("Attached")},
+		{"attach json", []string{"attach", "--json"}, "", workspaceResponse, api.Request{Action: "workspace.attach", Root: canonical, Backend: "auto"}, string(workspaceResponse) + "\n"},
+		{"status human", []string{"status"}, "", workspaceResponse, api.Request{Action: "workspace.status", Root: canonical, Backend: "auto"}, workspaceOutput("Workspace")},
+		{"status detached", []string{"status"}, "", detachedResponse, api.Request{Action: "workspace.status", Root: canonical, Backend: "auto"}, fmt.Sprintf("Workspace %s\n  State: detached\n", canonical)},
+		{"status degraded", []string{"status"}, "", degradedResponse, api.Request{Action: "workspace.status", Root: canonical, Backend: "auto"}, fmt.Sprintf("Workspace %s\n  State: degraded\n  Skills: %s (1 managed)\n  Backend: directory\n", canonical, skillsRoot)},
 		{"status", []string{"status", "--workspace", cwd, "--json"}, "", json.RawMessage(`{"ok":true}`), api.Request{Action: "workspace.status", Root: canonical, Backend: "auto"}, "{\"ok\":true}\n"},
-		{"search words", []string{"search", "weather", "temperature", "--format", "json"}, "", json.RawMessage(`{"ok":true}`), api.Request{Action: "search", Query: "weather temperature", Format: "json"}, "{\"ok\":true}\n"},
-		{"invoke", []string{"invoke", "echo/demo/echo"}, `{"x":1}`, json.RawMessage(`{"ok":true}`), api.Request{Action: "invoke", Capability: "echo/demo/echo", Input: json.RawMessage(`{"x":1}`)}, "{\"ok\":true}\n"},
-		{"events", []string{"calls", "events", "call-1", "--after", "100", "--limit", "25"}, "", json.RawMessage(`{"ok":true}`), api.Request{Action: "call.events", CallID: "call-1", After: 100, Limit: 25}, "{\"ok\":true}\n"},
-		{"permissions", []string{"acl", "grant", "agent", "echo/demo/echo", "read, invoke"}, "", json.RawMessage("null"), api.Request{Action: "acl.grant", Identity: "agent", Capability: "echo/demo/echo", Permissions: []string{"read", "invoke"}}, ""},
+		{"search words", []string{"search", "weather", "temperature"}, "", json.RawMessage(`[]`), api.Request{Action: "search", Query: "weather temperature"}, "No capabilities found.\n"},
+		{"invoke", []string{"invoke", "echo/demo/echo"}, `{"x":1}`, json.RawMessage(`{"ok":true}`), api.Request{Action: "invoke", Capability: "echo/demo/echo", Input: json.RawMessage(`{"x":1}`)}, "Result:\n  {\n    \"ok\": true\n  }\n"},
+		{"events", []string{"calls", "events", "call-1", "--after", "100", "--limit", "25"}, "", json.RawMessage(`{"events":[],"has_more":false}`), api.Request{Action: "call.events", CallID: "call-1", After: 100, Limit: 25}, "No events for call-1.\n"},
+		{"permissions", []string{"acl", "grant", "agent", "echo/demo/echo", "read, invoke"}, "", json.RawMessage("null"), api.Request{Action: "acl.grant", Identity: "agent", Capability: "echo/demo/echo", Permissions: []string{"read", "invoke"}}, "Granted read, invoke on echo/demo/echo to agent\n"},
 		{"token", []string{"tokens", "create", "agent"}, "", json.RawMessage(`"secret"`), api.Request{Action: "token.create", Identity: "agent"}, "secret\n"},
 	}
 
@@ -525,6 +549,223 @@ func TestCLIMapsArgumentsToRequests(t *testing.T) {
 				t.Fatalf("stdout=%q want %q", stdout, test.wantStdout)
 			}
 		})
+	}
+}
+
+func TestRPCCommandsDefaultToHumanReadableOutput(t *testing.T) {
+	workspaceResponse := json.RawMessage(`{"workspace":{"root":"/work","skills_root":"/work/.agents/skills","backend":"directory","state":"healthy"},"skills":[{}]}`)
+	tests := []struct {
+		name     string
+		request  api.Request
+		response json.RawMessage
+		plain    bool
+		want     string
+	}{
+		{"attach", api.Request{Action: "workspace.attach"}, workspaceResponse, false, "Attached /work\n  State: ready\n  Skills: /work/.agents/skills (1 managed)\n  Backend: directory\n"},
+		{"status", api.Request{Action: "workspace.status"}, workspaceResponse, false, "Workspace /work\n  State: ready\n  Skills: /work/.agents/skills (1 managed)\n  Backend: directory\n"},
+		{"update", api.Request{Action: "workspace.update"}, json.RawMessage(`{"providers":[{"id":"mcp/weather","state":"updated"}],"workspaces":[{"root":"/work","updated":1,"unchanged":2,"repaired":0,"removed":0,"failed":0}],"failed":0}`), false, "Updated managed Skills\n  Providers (1)\n    mcp/weather: updated\n  Workspaces (1)\n    /work: 1 updated, 2 unchanged\n"},
+		{"detach", api.Request{Action: "workspace.detach", Root: "/work"}, json.RawMessage(`null`), false, "Detached workspace /work\n"},
+		{"adapter add", api.Request{Action: "adapter.add", Protocol: "billing", Executable: "/opt/billing-adapter"}, json.RawMessage(`null`), false, "Registered adapter billing\n  Executable: /opt/billing-adapter\n"},
+		{"provider add", api.Request{Action: "provider.add", Protocol: "mcp", Name: "weather", Endpoint: "stdio:/opt/weather"}, json.RawMessage(`null`), false, "Added provider mcp/weather\n  Endpoint: stdio:/opt/weather\n"},
+		{"provider remove", api.Request{Action: "provider.remove", Protocol: "mcp", Name: "weather"}, json.RawMessage(`null`), false, "Removed provider mcp/weather\n"},
+		{"declarative add", api.Request{Action: "declarative.add"}, json.RawMessage(`{"name":"weather","digest":"sha256","root":"/work/.agents/skills/weather","capabilities":["api/weather/current"]}`), false, "Skill weather is ready\n  Root: /work/.agents/skills/weather\n  Digest: sha256\n  Capabilities (1)\n    api/weather/current\n"},
+		{"declarative diff", api.Request{Action: "declarative.diff"}, json.RawMessage(`{"name":"weather","changed":true,"added":["api/weather/current"],"modified":["api/weather/forecast"],"removed":["api/weather/old"]}`), false, "Changes for Skill weather\n  Added (1)\n    api/weather/current\n  Modified (1)\n    api/weather/forecast\n  Removed (1)\n    api/weather/old\n"},
+		{"declarative remove", api.Request{Action: "declarative.remove", Name: "weather"}, json.RawMessage(`null`), false, "Removed Skill weather\n"},
+		{"acl grant", api.Request{Action: "acl.grant", Identity: "support", Capability: "mcp/weather/forecast", Permissions: []string{"read", "invoke"}}, json.RawMessage(`null`), false, "Granted read, invoke on mcp/weather/forecast to support\n"},
+		{"token create", api.Request{Action: "token.create"}, json.RawMessage(`"secret"`), true, "secret\n"},
+		{"search", api.Request{Action: "search"}, json.RawMessage(`[{"capability":{"ID":"mcp/weather/forecast","Kind":"tool","Name":"Weather forecast","Description":"Forecast by city","Source":{"Protocol":"mcp","Provider":"weather","UpstreamName":"forecast"}},"score":1,"reason":"exact_id"}]`), false, "Capabilities (1)\n  mcp/weather/forecast\n    Name: Weather forecast\n    Description: Forecast by city\n"},
+		{"project add", api.Request{Action: "project.add", Capability: "mcp/weather/forecast", Root: "/work/.agents/skills"}, json.RawMessage(`null`), false, "Projected mcp/weather/forecast\n  Skills: /work/.agents/skills\n"},
+		{"invoke", api.Request{Action: "invoke"}, json.RawMessage(`{"temperature":21}`), false, "Result:\n  {\n    \"temperature\": 21\n  }\n"},
+		{"call start", api.Request{Action: "call.start"}, json.RawMessage(`"call-1"`), true, "call-1\n"},
+		{"call get", api.Request{Action: "call.get"}, json.RawMessage(`{"call":{"id":"call-1","capability_id":"mcp/weather/forecast","state":"completed"},"result":{"temperature":21}}`), false, "Call call-1\n  Capability: mcp/weather/forecast\n  State: completed\n  Result:\n    {\n      \"temperature\": 21\n    }\n"},
+		{"call events", api.Request{Action: "call.events", CallID: "call-1"}, json.RawMessage(`{"events":[{"sequence":7,"envelope":{"kind":"event","type":"progress","data":{"percent":50}}},{"sequence":8,"envelope":{"kind":"artifact","name":"report.txt","media_type":"text/plain","encoding":"base64","data":"c2VjcmV0"}}],"next_after":8,"has_more":false}`), false, "Events for call-1 (2)\n  #7 event: progress\n    Data:\n      {\n        \"percent\": 50\n      }\n  #8 artifact: report.txt\n    Media type: text/plain\n    Encoding: base64\n    Data: omitted (use --json)\n  Next cursor: 8\n  More available: no\n"},
+		{"call cancel", api.Request{Action: "call.cancel", CallID: "call-1"}, json.RawMessage(`null`), false, "Canceled call call-1\n"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			cmd := &cobra.Command{}
+			cmd.SetOut(&stdout)
+			c := &cli{call: func(api.Request) (json.RawMessage, error) { return test.response, nil }}
+			if err := c.runRequest(cmd, test.request, test.plain, ""); err != nil {
+				t.Fatal(err)
+			}
+			if got := stdout.String(); got != test.want {
+				t.Fatalf("stdout=%q want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestHumanOutputEscapesTerminalControls(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  api.Request
+		response json.RawMessage
+		want     []string
+	}{
+		{
+			"provider update",
+			api.Request{Action: "workspace.update"},
+			json.RawMessage(`{"providers":[{"id":"mcp/evil\u001b]0;owned\u0007","state":"failed","error":"offline\u001b[31m\nforged"}],"workspaces":[],"failed":1}`),
+			[]string{`mcp/evil\u001b]0;owned\u0007`, `offline\u001b[31m forged`},
+		},
+		{
+			"search metadata",
+			api.Request{Action: "search"},
+			json.RawMessage(`[{"capability":{"ID":"mcp/evil/run","Name":"Run\u001b]2;owned\u0007\nforged","Description":"red\u001b[31m text"}}]`),
+			[]string{`Name: Run\u001b]2;owned\u0007 forged`, `Description: red\u001b[31m text`},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := humanResponse(test.request, test.response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.ContainsAny(output, "\x1b\a\r\t") || strings.Contains(output, "\nforged") {
+				t.Fatalf("unsafe terminal control in output %q", output)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("output missing %q: %q", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestJSONFlagReturnsMachineReadableRPCOutput(t *testing.T) {
+	cwd := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		args     []string
+		response json.RawMessage
+		want     string
+	}{
+		{"structured", []string{"status", "--json"}, json.RawMessage(`{"workspace":{"root":"/work","state":"detached"},"skills":[]}`), "{\"workspace\":{\"root\":\"/work\",\"state\":\"detached\"},\"skills\":[]}\n"},
+		{"empty success", []string{"detach", "--json"}, json.RawMessage(`null`), "{\"ok\":true}\n"},
+		{"null result", []string{"invoke", "echo/demo/echo", "--json"}, json.RawMessage(`null`), "null\n"},
+		{"scalar", []string{"tokens", "create", "support", "--json"}, json.RawMessage(`"secret"`), "\"secret\"\n"},
+		{"legacy search alias", []string{"search", "weather", "--format", "json"}, json.RawMessage(`[]`), "[]\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := &cli{
+				cwd: cwd,
+				call: func(request api.Request) (json.RawMessage, error) {
+					if request.Root != "" && request.Root != canonical {
+						t.Fatalf("root=%q want %q", request.Root, canonical)
+					}
+					return test.response, nil
+				},
+				getenv: func(string) string { return "0" },
+			}
+			stdout, err := executeTestCommand(t, c, test.args, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stdout != test.want || !json.Valid([]byte(strings.TrimSpace(stdout))) {
+				t.Fatalf("stdout=%q want valid JSON %q", stdout, test.want)
+			}
+		})
+	}
+}
+
+func TestFailedUpdateFormatsPartialResults(t *testing.T) {
+	data := json.RawMessage(`{"providers":[{"id":"mcp/weather","state":"failed","error":"offline"}],"workspaces":[],"failed":1}`)
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"human", []string{"update"}, "Updated managed Skills\n  Providers (1)\n    mcp/weather: failed — offline\n  Workspaces (0)\n  Failures: 1\n"},
+		{"json", []string{"update", "--json"}, string(data) + "\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			remote := &rpcError{code: "update_failed", message: "update completed with 1 failures", data: append(json.RawMessage(nil), data...)}
+			c := &cli{
+				cwd: t.TempDir(),
+				call: func(api.Request) (json.RawMessage, error) {
+					return nil, remote
+				},
+				getenv: func(string) string { return "0" },
+			}
+			stdout, err := executeTestCommand(t, c, test.args, "")
+			if err == nil || !strings.Contains(err.Error(), "update_failed") {
+				t.Fatalf("error=%v", err)
+			}
+			if stdout != test.want {
+				t.Fatalf("stdout=%q want %q", stdout, test.want)
+			}
+			if len(remote.data) != 0 {
+				t.Fatalf("partial data was left for raw stderr output: %s", remote.data)
+			}
+		})
+	}
+}
+
+func TestLocalCommandsDefaultToHumanOutputAndSupportJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "weather.yaml")
+	source := `apiVersion: 9a.dev/v1alpha1
+kind: Skill
+metadata:
+  name: weather
+services:
+  demo:
+    baseURL: https://example.com
+operations:
+  current:
+    service: demo
+    method: GET
+    path: /weather
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &cli{cwd: dir, getenv: func(string) string { return "0" }}
+	human, err := executeTestCommand(t, c, []string{"validate", path}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Valid Skill weather", "Digest:", "Capabilities (1)", "api/weather/current"} {
+		if !strings.Contains(human, want) {
+			t.Fatalf("validate output missing %q:\n%s", want, human)
+		}
+	}
+	if json.Valid([]byte(strings.TrimSpace(human))) {
+		t.Fatalf("default validate output is raw JSON: %s", human)
+	}
+	machine, err := executeTestCommand(t, c, []string{"validate", path, "--json"}, "")
+	if err != nil || !json.Valid([]byte(strings.TrimSpace(machine))) {
+		t.Fatalf("validate --json output=%q err=%v", machine, err)
+	}
+
+	version, err := executeTestCommand(t, c, []string{"version", "--json"}, "")
+	if err != nil || !json.Valid([]byte(strings.TrimSpace(version))) || !strings.Contains(version, `"version"`) {
+		t.Fatalf("version --json output=%q err=%v", version, err)
+	}
+}
+
+func TestJSONFlagIsDocumentedForDataCommands(t *testing.T) {
+	cmd := newRootCommand(&cli{cwd: t.TempDir(), getenv: func(string) string { return "0" }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"update", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--json", "machine-readable JSON", "human-readable"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("update help is missing %q:\n%s", want, output.String())
+		}
 	}
 }
 
@@ -598,6 +839,18 @@ func TestVersionCommandAndFlagAgreeWithoutDaemon(t *testing.T) {
 	}
 }
 
+func TestVersionShortcutHonorsJSONFlagInEitherOrder(t *testing.T) {
+	for _, args := range [][]string{{"--json", "--version"}, {"--version", "--json"}} {
+		output, err := executeTestCommand(t, &cli{cwd: t.TempDir(), getenv: func(string) string { return "" }}, args, "")
+		if err != nil {
+			t.Fatalf("9a %s: %v", strings.Join(args, " "), err)
+		}
+		if !json.Valid([]byte(strings.TrimSpace(output))) || !strings.Contains(output, `"version"`) {
+			t.Fatalf("9a %s output=%q", strings.Join(args, " "), output)
+		}
+	}
+}
+
 func TestHelpDocumentsEveryCommandWithoutDaemon(t *testing.T) {
 	tests := []struct {
 		args []string
@@ -621,7 +874,7 @@ func TestHelpDocumentsEveryCommandWithoutDaemon(t *testing.T) {
 		{[]string{"help", "providers", "remove"}, []string{"9a providers remove <protocol> <name>"}},
 		{[]string{"help", "acl", "grant"}, []string{"9a acl grant <identity> <capability> <permissions>", "comma-separated", "read", "invoke", "write", "admin"}},
 		{[]string{"help", "tokens", "create"}, []string{"9a tokens create <identity>"}},
-		{[]string{"help", "search"}, []string{"9a search <query...>", "--format"}},
+		{[]string{"help", "search"}, []string{"9a search <query...>", "--json"}},
 		{[]string{"help", "project", "add"}, []string{"9a project add <capability> <skills-root>"}},
 		{[]string{"help", "invoke"}, []string{"9a invoke <capability>", "JSON from stdin"}},
 		{[]string{"help", "completion"}, []string{"9a completion <shell>", "bash", "zsh", "fish", "powershell"}},
