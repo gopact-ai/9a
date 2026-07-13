@@ -1,0 +1,35 @@
+README.md
+  s_90a636a9ddfd26::t_3244de80561c6d 112-120
+cmd/9a/commands.go
+  s_90a636a9ddfd26::t_3842720df4346b 1-657
+cmd/9a/main.go
+  s_90a636a9ddfd26::t_d9d2229a16c4eb 7,16-20,66-68,70,78,81-82,85,87,89,92,97,100-101,103,115-116,130-132,136,141,144-145,151,153,155-156,158-159,161,163,165,169-185,190-194,197-201,203-205,213-214,216-218,220,222,224,226-239,241-242
+cmd/9a/main_test.go
+  s_90a636a9ddfd26::t_9b502b8edc74d6 19,45,52,56-58,66,71,74-75,81-82,84-85,89-94,97,99,104-110,118,123,131,136,141-146,154,157,159,161,164,167,170,173-175,187-245,247-303,305-406
+docs/getting-started.md
+  s_90a636a9ddfd26::t_06a821064e6a97 315-319,329-332,335,342-343
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_2053e117daa44d 107-115
+go.mod
+  s_90a636a9ddfd26::t_82d3e8a4cda11e 10,19,24
+go.sum
+  s_90a636a9ddfd26::t_d32d03748c196e 1,10-11,26-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2f7316a3eef898d0fcf54baa9b7f3ea5d7fdf10c",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
