@@ -46,6 +46,12 @@ Start from a project directory:
 9a status --json
 ```
 
+Search includes both provider capabilities and user-owned Skills already under
+`.agents/skills`. Each search rescans every attached workspace and each direct
+child containing `SKILL.md`; adding, changing, or removing any file in that
+Skill synchronizes the local Catalog. NineA-owned projections are skipped
+because their source capabilities are already indexed.
+
 Workspace roots are resolved in the client: `--workspace` wins, then the
 enclosing Git worktree, then the current directory. Running from inside
 `.agents/skills` or `.claude/skills` selects the directory that owns that
@@ -338,7 +344,7 @@ and asynchronous call start keep their useful plain scalar output by default.
 | `9a detach [--workspace PATH]` | Remove only this workspace's managed view | authenticated identity |
 | `9a tokens create <identity>` | Create a bearer token for an identity | `admin` |
 | `9a acl grant <identity> <capability> <permissions>` | Grant comma-separated `read`, `invoke`, `write`, or `admin` permissions | `admin` |
-| `9a search <query...>` | Search visible capabilities; unquoted words are joined | capability `read` |
+| `9a search <query...>` | Search visible provider capabilities and local Skills; unquoted words are joined | capability `read` |
 | `9a project add <capability> <skills-root>` | Materialize one filesystem Skill | capability `read` |
 | `9a invoke <capability>` | Read up to 8 MiB of JSON and wait with a 30-second CLI timeout | capability `invoke` |
 | `9a calls start <capability>` | Persist up to 8 MiB of JSON and start an asynchronous call | capability `invoke` |
@@ -356,7 +362,8 @@ and asynchronous call start keep their useful plain scalar output by default.
 - **`unauthorized`:** set `NINEA_TOKEN` to a token issued for this identity.
 - **Bootstrap failure on restart:** unset `NINEA_BOOTSTRAP_TOKEN` after the
   first successful start.
-- **Empty search:** grant `read` on the capability to that identity.
+- **Empty search:** grant `read` on provider capabilities; for a local Skill,
+  put `SKILL.md` directly under `.agents/skills/<name>/` and search again.
 - **`permission_denied`:** projection needs `read`; execution needs `invoke`;
   adapter, provider, token, and ACL mutation needs `admin`.
 - **Provider discovery failure:** confirm the endpoint, daemon-inherited

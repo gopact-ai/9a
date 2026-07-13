@@ -12,7 +12,8 @@
 to read-only managed files. `update` rediscovers providers, refreshes the
 Catalog, upgrades the built-in Skill, repairs valid owned directory
 projections, and removes stale views. `detach` removes only the current
-workspace view; it preserves providers, API sources, ACLs, and call history.
+workspace view and its local-Skill Catalog entries; it preserves the
+user-owned Skill files, providers, API sources, ACLs, and call history.
 Because update rediscovers providers and changes the shared Catalog, it requires
 an administrator token.
 
@@ -41,7 +42,8 @@ Common checks:
 - Daemon startup failed: inspect `$HOME/.local/state/ninea/daemon.log` and any
   explicit `NINEA_SOCKET` override.
 - Unauthorized: set `NINEA_TOKEN` to an issued identity token.
-- Empty search: grant `read` on the capability.
+- Empty search: grant `read` on provider capabilities. For a local Skill, put
+  `SKILL.md` directly under `.agents/skills/<name>/` and search again.
 - Invocation denied: grant `invoke` separately.
 - FUSE fallback: inspect `9a status --json`; install/enable the platform FUSE
   runtime or explicitly use the directory backend.

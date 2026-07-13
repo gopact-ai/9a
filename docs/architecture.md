@@ -95,6 +95,11 @@ and never contacts or invokes an upstream provider. This gives agents
 progressive capability disclosure: search first, then load the complete Skill
 only when it becomes relevant.
 
+Workspace attach also indexes user-owned Skill directories from
+`.agents/skills`. A digest covers the complete directory, and each search
+reconciles additions, changes, and removals from every attached workspace into
+the same Catalog. NineA-owned projections are excluded to avoid duplicates.
+
 ### Skill projection
 
 The workspace projection manager owns attach, update, status, restore, and

@@ -45,5 +45,16 @@ func (a *App) WorkspaceStatus(ctx context.Context, root string) (projection.Stat
 	return status, nil
 }
 func (a *App) DetachWorkspace(ctx context.Context, root string) error {
+	a.mutation.Lock()
+	defer a.mutation.Unlock()
+	status, err := a.projections.Status(ctx, root)
+	if err != nil {
+		return err
+	}
+	if status.Workspace.State != workspace.StateDetached {
+		if err = a.removeLocalSkills(ctx, status.Workspace); err != nil {
+			return err
+		}
+	}
 	return a.projections.Detach(ctx, root)
 }

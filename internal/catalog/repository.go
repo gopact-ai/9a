@@ -165,6 +165,14 @@ func (r *Repository) ListProviders(ctx context.Context) ([]provider.Provider, er
 }
 
 func (r *Repository) DeleteProvider(ctx context.Context, providerID string) (err error) {
+	return r.deleteProvider(ctx, providerID, true)
+}
+
+func (r *Repository) DeleteProviderPreservingACL(ctx context.Context, providerID string) (err error) {
+	return r.deleteProvider(ctx, providerID, false)
+}
+
+func (r *Repository) deleteProvider(ctx context.Context, providerID string, deleteACL bool) (err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -174,8 +182,10 @@ func (r *Repository) DeleteProvider(ctx context.Context, providerID string) (err
 			_ = tx.Rollback()
 		}
 	}()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
-		return err
+	if deleteACL {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capability_fts WHERE id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
 		return err
