@@ -2,7 +2,7 @@
 
 [简体中文](docs/zh-CN/README.md)
 
-## Turn APIs, MCP tools, and A2A agents into Skills every agent can use
+## 🚀 Turn APIs, MCP tools, and A2A agents into Skills every agent can use
 
 NineA is a capability layer for AI agents. It turns heterogeneous upstream
 systems into inspectable, executable Skills on the local filesystem—the
@@ -75,7 +75,7 @@ The first agent-facing command also attaches NineA's built-in `using-ninea`
 Skill. An AI agent can read it to discover, invoke, add, update, and diagnose
 capabilities without requiring the user to memorize the CLI or YAML schema.
 
-## Why files and commands
+## 🧭 Why files and commands
 
 AI agents are already excellent at two durable interfaces:
 
@@ -95,7 +95,7 @@ each caller assembles the view it needs. NineA does not implement 9P and does
 not pretend remote actions are files. Files disclose capabilities; commands
 perform actions. Read [Architecture and Plan 9](docs/architecture.md).
 
-## Install
+## 📦 Install
 
 Homebrew installs the `9a` client and `ninead` daemon on macOS or Linux:
 
@@ -148,7 +148,7 @@ checked read-only files and reports the fallback reason in `9a status`. It
 never mounts over or replaces user-owned Skills. Use `9a update` to rediscover
 providers and repair views, and `9a detach` to remove only the workspace view.
 
-## Three integration paths
+## 🔌 Three integration paths
 
 | Upstream | Integration path | Best for |
 | --- | --- | --- |
@@ -180,7 +180,7 @@ CALL_ID="$(printf '%s\n' '{"location":"Shanghai"}' | \
 9a calls events "$CALL_ID" --limit 100
 ```
 
-## Security boundaries
+## 🔒 Security boundaries
 
 NineA uses bearer identities, a private Unix socket, and default-deny
 capability ACLs. Reading and invocation are separate permissions. Remote API
@@ -198,7 +198,7 @@ SHA-256 manifests, but the owner of the operating-system account can still
 replace files or permissions; use `--backend fuse` when that distinction is a
 requirement.
 
-## Documentation
+## 📚 Documentation
 
 - [Declarative Skills](docs/declarative-skills.md)—YAML schema, variables,
   templates, hooks, workflows, lifecycle, and troubleshooting
