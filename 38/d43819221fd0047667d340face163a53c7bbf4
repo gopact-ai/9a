@@ -1,0 +1,25 @@
+internal/app/app.go
+  s_90a636a9ddfd26::t_2eea6d59455ad5 435
+internal/app/app_test.go
+  s_90a636a9ddfd26::t_909c426982d4e8 62-93
+internal/authz/service.go
+  s_90a636a9ddfd26::t_7e786280d8a3e2 50-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "38d43819221fd0047667d340face163a53c7bbf4",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
