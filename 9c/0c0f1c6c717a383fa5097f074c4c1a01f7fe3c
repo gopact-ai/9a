@@ -1,0 +1,71 @@
+Makefile
+  s_90a636a9ddfd26::t_02061b312a3aae 22
+README.md
+  s_90a636a9ddfd26::t_70370a0824ce61 100,106,112,121-124,131,134,137-142
+cmd/9a/commands.go
+  s_90a636a9ddfd26::t_7fa4f7e2bf3bdb 42,45,69,101,663,665
+cmd/9a/main.go
+  s_90a636a9ddfd26::t_27c386573a6211 185-186,188-199,201-204,213-215,238-264
+docs/SECURITY.md
+  s_90a636a9ddfd26::t_c4fd97ab13cadc 13,18-21,36
+docs/adapters.md
+  s_90a636a9ddfd26::t_e42c85cffe78ed 15,21,179,195
+docs/architecture.md
+  s_90a636a9ddfd26::t_948cf4dc397242 48,165,292
+docs/declarative-skills.md
+  s_90a636a9ddfd26::t_9f3ef03e28aa5e 10,119,124,357
+docs/getting-started.md
+  s_90a636a9ddfd26::t_016ff3d2fa4212 3,10,51,67,80,94-95,137,140,167-170,172-186,189,192-200,204-205,240,265,350-352
+docs/superpowers/plans/2026-07-13-9a-auto-daemon.md
+  s_90a636a9ddfd26::t_04505531258eeb 1-72
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_d1453c1640cc6b 95,101,107,116,124,127,130-134
+examples/http-adapter/README.md
+  s_90a636a9ddfd26::t_b3534d7b77aa88 4,85
+internal/authn/token.go
+  s_90a636a9ddfd26::t_c8d73c5db9e963 11,29,32-39,42
+internal/authn/token_test.go
+  s_90a636a9ddfd26::t_b331b0ad9be4bd 5,11-28
+internal/builtin/skills/using-ninea/SKILL.md
+  s_90a636a9ddfd26::t_4bf48bb71e5fb0 27
+internal/builtin/skills/using-ninea/references/declarative.md
+  s_90a636a9ddfd26::t_1470d2bb358d69 4
+internal/builtin/skills/using-ninea/references/integrations.md
+  s_90a636a9ddfd26::t_1fcee365f8d3de 15
+internal/builtin/skills/using-ninea/references/troubleshooting.md
+  s_90a636a9ddfd26::t_1af52ae3d28a27 26,32,34-36,41-42,52-53
+scripts/test-release-check.sh
+  s_90a636a9ddfd26::t_517b773c515971 23-31,57-63
+test/e2e/a2a_test.go
+  s_90a636a9ddfd26::t_57e4adb7607738 115,120,123,139
+test/e2e/calls_test.go
+  s_90a636a9ddfd26::t_140f01fde1462c 67,74,77,95-96
+test/e2e/declarative_test.go
+  s_90a636a9ddfd26::t_c46059e21933a0 40,101,108
+test/e2e/http_adapter_test.go
+  s_90a636a9ddfd26::t_1df423ff6fb7e0 60,88,96,99,115
+test/e2e/managed_skills_test.go
+  s_90a636a9ddfd26::t_c2446980939c4b 21,29,31
+test/e2e/mcp_test.go
+  s_90a636a9ddfd26::t_66d1216beefa8d 34-45,91,97-98,124,165,200,203-204,216
+test/e2e/zero_config_test.go
+  s_90a636a9ddfd26::t_8555ba7567d746 1,4-10,12,15-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9c0c0f1c6c717a383fa5097f074c4c1a01f7fe3c",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
