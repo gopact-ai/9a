@@ -104,6 +104,15 @@ brew install gopact-ai/tap/ninea
 brew upgrade gopact-ai/tap/ninea
 ```
 
+可用以下命令确认 Homebrew 放到 `PATH` 中的 client 版本，并在不启动 daemon 的
+情况下查看完整参数：
+
+```sh
+9a version
+9a --help
+9a help calls events
+```
+
 升级后使用原来的 state database 和 socket 重启 `ninead`，再执行
 `9a update --check` 预览变化，执行 `9a update` 刷新内置 Skill 和当前 workspace 的
 托管视图。软件升级与 workspace 更新的完整区别见英文

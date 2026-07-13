@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -414,12 +415,24 @@ func (a *App) addProviderLocked(lease *operationLease, p provider.Provider) erro
 	return nil
 }
 func (a *App) Grant(ctx context.Context, identity, capID string, permissions []string) error {
-	for _, p := range permissions {
-		if e := a.az.Grant(ctx, identity, capID, authz.Permission(p)); e != nil {
-			return e
-		}
+	if strings.TrimSpace(identity) == "" {
+		return errors.New("identity must be non-empty")
 	}
-	return nil
+	if strings.TrimSpace(capID) == "" {
+		return errors.New("capability must be non-empty")
+	}
+	if len(permissions) == 0 {
+		return errors.New("at least one permission is required")
+	}
+	parsed := make([]authz.Permission, len(permissions))
+	for i, value := range permissions {
+		permission, err := authz.ParsePermission(value)
+		if err != nil {
+			return err
+		}
+		parsed[i] = permission
+	}
+	return a.az.GrantAll(ctx, identity, capID, parsed)
 }
 func (a *App) Search(ctx context.Context, identity string, q search.Query) ([]search.Result, error) {
 	return a.search.Search(ctx, identity, q)
