@@ -13,8 +13,9 @@ import (
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/catalog"
 	"github.com/gopact-ai/9a/internal/declarative"
-	"github.com/gopact-ai/9a/internal/mount/dir"
+	"github.com/gopact-ai/9a/internal/mount"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/workspace"
 )
 
 type DeclarativeResult struct {
@@ -53,7 +54,7 @@ func (a *App) AddDeclarative(ctx context.Context, identity string, source []byte
 		Protocol: "api",
 		Name:     config.Metadata.Name,
 		Endpoint: "declarative://" + config.Metadata.Name,
-		Config:   map[string]string{"source": string(source), "projection_root": projectionRoot},
+		Config:   map[string]string{"source": string(source), "projection_root": projectionRoot, "workspace_root": workspaceRoot},
 	}
 	a.mu.RLock()
 	adapter, ok := a.adapters["api"].(*declarative.Adapter)
@@ -90,42 +91,23 @@ func (a *App) AddDeclarative(ctx context.Context, identity string, source []byte
 		restoreDeclarativeRegistration(adapter, previous, p.ID)
 		return DeclarativeResult{}, err
 	}
-	backend := dir.New()
-	if err := backend.Publish(lease.ctx, projectionRoot, skill); err != nil {
+	if _, err := a.projections.Attach(lease.ctx, workspaceRoot, workspace.PolicyAuto); err != nil {
 		revokeErr := a.revokeDeclarativeGrants(cleanupCtx, identity, grants)
 		restoreDeclarativeRegistration(adapter, previous, p.ID)
 		return DeclarativeResult{}, errors.Join(err, revokeErr)
 	}
-	oldProjectionRemoved := false
-	if previous != nil && previous.Config["projection_root"] != projectionRoot {
-		oldConfig, parseErr := declarative.Parse([]byte(previous.Config["source"]))
-		if parseErr != nil {
-			_ = backend.Remove(cleanupCtx, projectionRoot, skill)
-			revokeErr := a.revokeDeclarativeGrants(cleanupCtx, identity, grants)
-			restoreDeclarativeRegistration(adapter, previous, p.ID)
-			return DeclarativeResult{}, errors.Join(parseErr, revokeErr)
-		}
-		oldSkill, renderErr := declarative.RenderSkill(oldConfig)
-		if renderErr != nil {
-			_ = backend.Remove(cleanupCtx, projectionRoot, skill)
-			revokeErr := a.revokeDeclarativeGrants(cleanupCtx, identity, grants)
-			restoreDeclarativeRegistration(adapter, previous, p.ID)
-			return DeclarativeResult{}, errors.Join(renderErr, revokeErr)
-		}
-		if removeErr := backend.Remove(lease.ctx, previous.Config["projection_root"], oldSkill); removeErr != nil {
-			_ = backend.Remove(cleanupCtx, projectionRoot, skill)
-			revokeErr := a.revokeDeclarativeGrants(cleanupCtx, identity, grants)
-			restoreDeclarativeRegistration(adapter, previous, p.ID)
-			return DeclarativeResult{}, errors.Join(removeErr, revokeErr)
-		}
-		oldProjectionRemoved = true
+	snapshot, err := mount.NewSnapshot(skill.CapabilityID, skill.Name, config.Digest, 1, skill.Files)
+	if err != nil {
+		return DeclarativeResult{}, err
+	}
+	if _, err = a.projections.Register(lease.ctx, workspaceRoot, projectionRoot, snapshot, "declarative", p.ID); err != nil {
+		revokeErr := a.revokeDeclarativeGrants(cleanupCtx, identity, grants)
+		restoreDeclarativeRegistration(adapter, previous, p.ID)
+		return DeclarativeResult{}, errors.Join(err, revokeErr)
 	}
 	if err := a.addProviderLocked(lease, p); err != nil {
-		removeErr := backend.Remove(cleanupCtx, projectionRoot, skill)
-		var restoreErr error
-		if previous != nil && (oldProjectionRemoved || previous.Config["projection_root"] == projectionRoot) {
-			restoreErr = restoreDeclarativeProjection(cleanupCtx, backend, previous)
-		}
+		removeErr := a.projections.Remove(cleanupCtx, workspaceRoot, skill.CapabilityID)
+		restoreErr := a.restoreDeclarativeProjection(cleanupCtx, previous)
 		revokeErr := a.revokeDeclarativeGrants(cleanupCtx, identity, grants)
 		restoreDeclarativeRegistration(adapter, previous, p.ID)
 		return DeclarativeResult{}, errors.Join(err, removeErr, restoreErr, revokeErr)
@@ -244,12 +226,15 @@ func (a *App) RemoveDeclarative(ctx context.Context, identity, name string) erro
 	}
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(lease.ctx), 30*time.Second)
 	defer cancelCleanup()
-	backend := dir.New()
-	if err := backend.Remove(lease.ctx, p.Config["projection_root"], skill); err != nil {
+	workspaceRoot := p.Config["workspace_root"]
+	if workspaceRoot == "" {
+		workspaceRoot = filepath.Dir(filepath.Dir(p.Config["projection_root"]))
+	}
+	if err := a.projections.Remove(lease.ctx, workspaceRoot, skill.CapabilityID); err != nil {
 		return err
 	}
 	if err := catalog.New(a.db).DeleteProvider(lease.ctx, p.ID); err != nil {
-		return errors.Join(err, backend.Publish(cleanupCtx, p.Config["projection_root"], skill))
+		return errors.Join(err, a.restoreDeclarativeProjection(cleanupCtx, p))
 	}
 	a.mu.Lock()
 	delete(a.providers, p.ID)
@@ -285,7 +270,7 @@ func restoreDeclarativeRegistration(adapter *declarative.Adapter, previous *prov
 	}
 }
 
-func restoreDeclarativeProjection(ctx context.Context, backend *dir.Backend, previous *provider.Provider) error {
+func (a *App) restoreDeclarativeProjection(ctx context.Context, previous *provider.Provider) error {
 	if previous == nil {
 		return nil
 	}
@@ -297,7 +282,16 @@ func restoreDeclarativeProjection(ctx context.Context, backend *dir.Backend, pre
 	if err != nil {
 		return err
 	}
-	return backend.Publish(ctx, previous.Config["projection_root"], skill)
+	workspaceRoot := previous.Config["workspace_root"]
+	if workspaceRoot == "" {
+		workspaceRoot = filepath.Dir(filepath.Dir(previous.Config["projection_root"]))
+	}
+	snapshot, err := mount.NewSnapshot(skill.CapabilityID, skill.Name, config.Digest, 1, skill.Files)
+	if err != nil {
+		return err
+	}
+	_, err = a.projections.Register(ctx, workspaceRoot, previous.Config["projection_root"], snapshot, "declarative", previous.ID)
+	return err
 }
 
 func declarativeValues(config *declarative.Config) map[string]any {

@@ -97,6 +97,22 @@ only when it becomes relevant.
 
 ### Skill projection
 
+The workspace projection manager owns attach, update, status, restore, and
+detach. Its registry stores canonical workspace paths and every managed Skill's
+source, target, revision, format, and digest. The CLI resolves workspace paths;
+the daemon never interprets a relative client path.
+
+Each managed Skill is an independent projection. On supported systems the
+FUSE backend mounts that Skill directory as an immutable in-memory snapshot.
+The directory backend publishes the same snapshot through a staging directory,
+records per-file SHA-256 digests, applies read-only modes, and atomically swaps
+complete trees. Independent mountpoints let user-owned Skills remain ordinary
+writable directories beside 9A-managed content.
+
+Every workspace includes the embedded `using-ninea` Skill, which teaches AI
+agents how to operate and extend NineA. It is versioned with the installed
+binary and reconciled automatically after an upgrade.
+
 MCP, A2A, and custom adapters selectively project one visible Capability as an
 ordinary Agent Skill:
 
@@ -108,7 +124,7 @@ ninea-mcp-weather-get-weather/
   scripts/invoke
 ```
 
-The files contain instructions, a machine-readable contract, bounded
+The views contain instructions, a machine-readable contract, bounded
 provenance, and a small invocation entry point. NineA refuses to overwrite
 paths it does not own.
 
@@ -133,7 +149,7 @@ weather/
   references/source.yaml
 ```
 
-The source and projection location are persisted with the API provider. A
+The source and managed projection location are persisted. A
 daemon restart restores the compiled adapter registration without requiring the
 original YAML file to remain at its import path.
 
@@ -253,7 +269,7 @@ Primary references:
 1. An administrator registers a provider under an adapter protocol.
 2. NineA asks the adapter to discover upstream operations.
 3. The adapter returns protocol-neutral capability descriptions.
-4. The current alpha validates required identity and contract fields. The
+4. The current 0.x release validates required identity and contract fields. The
    executable adapter contract additionally requires schema shape, lifecycle,
    and message-bound validation before external adapters are accepted.
 5. The Catalog atomically replaces that provider's previous revision.

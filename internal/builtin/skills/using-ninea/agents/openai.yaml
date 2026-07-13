@@ -1,0 +1,4 @@
+interface:
+  display_name: "Using NineA"
+  short_description: "Use and extend capabilities managed by NineA"
+  default_prompt: "Use $using-ninea to discover, invoke, or add the capability requested by the user."

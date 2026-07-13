@@ -50,7 +50,7 @@ printf '%s\n' '{"latitude":31.2,"longitude":121.5}' | \
   .agents/skills/weather/operations/current-weather/invoke
 ```
 
-NineA materializes a real Skill, not a hidden tool registration:
+NineA attaches a visible, read-only Skill, not a hidden tool registration:
 
 ```text
 .agents/skills/weather/
@@ -70,6 +70,10 @@ available for signing and transformations that cannot be declarative.
 See the runnable [Open-Meteo example](examples/declarative/open-meteo.yaml),
 the [multi-API bundle](examples/declarative/api-bundle.yaml), and the complete
 [Declarative Skills manual](docs/declarative-skills.md).
+
+The first agent-facing command also attaches NineA's built-in `using-ninea`
+Skill. An AI agent can read it to discover, invoke, add, update, and diagnose
+capabilities without requiring the user to memorize the CLI or YAML schema.
 
 ## 🧭 Why files and commands
 
@@ -99,6 +103,19 @@ Homebrew installs the `9a` client and `ninead` daemon on macOS or Linux:
 brew install gopact-ai/tap/ninea
 ```
 
+Upgrade both commands with:
+
+```sh
+brew upgrade gopact-ai/tap/ninea
+```
+
+After upgrading, restart `ninead` with the same state database and socket, then
+run `9a update --check` and `9a update` to refresh the built-in Skill and the
+current workspace's managed views. Use `9a update --all` only when every
+attached workspace should be reconciled. See
+[Upgrade NineA](docs/getting-started.md#upgrade-ninea) for the safe sequence and
+the distinction between a software upgrade and a workspace update.
+
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) provides archives
 and SHA-256 checksums for macOS and Linux on x86-64 and ARM64.
 
@@ -114,8 +131,22 @@ NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
 ```
 
 Leave `NINEA_BOOTSTRAP_TOKEN` unset on later starts. The
-[Getting Started guide](docs/getting-started.md) covers persistent startup,
-separate agent identities, ACLs, MCP, A2A, and the complete command reference.
+[User Guide](docs/getting-started.md) covers AI-agent operation, persistent
+startup, upgrades, separate agent identities, ACLs, MCP, A2A, and the complete
+command reference.
+
+From a workspace, the normal agent workflow starts automatically:
+
+```sh
+9a search "weather"
+9a status --json
+```
+
+NineA prefers a separate read-only FUSE mount for each managed Skill when the
+platform runtime is available. Otherwise it atomically publishes integrity-
+checked read-only files and reports the fallback reason in `9a status`. It
+never mounts over or replaces user-owned Skills. Use `9a update` to rediscover
+providers and repair views, and `9a detach` to remove only the workspace view.
 
 ## 🔌 Three integration paths
 
@@ -135,6 +166,9 @@ selectively:
 printf '%s\n' '{"location":"Shanghai"}' | \
   .agents/skills/ninea-mcp-weather-get-weather/scripts/invoke
 ```
+
+Remove a provider and every managed view sourced from it with
+`9a providers remove <protocol> <name>`.
 
 For work that must outlive one CLI request, NineA persists call state, results,
 events, and confirmed cancellation in SQLite:
@@ -158,14 +192,20 @@ code running with the daemon user's privileges. Use a dedicated OS account or
 sandbox when that boundary is not strong enough. Read the complete
 [Security guide](docs/SECURITY.md).
 
+FUSE provides kernel-enforced read-only semantics. The directory fallback
+prevents normal tools from editing managed content and detects changes with
+SHA-256 manifests, but the owner of the operating-system account can still
+replace files or permissions; use `--backend fuse` when that distinction is a
+requirement.
+
 ## 📚 Documentation
 
 - [Declarative Skills](docs/declarative-skills.md)—YAML schema, variables,
   templates, hooks, workflows, lifecycle, and troubleshooting
 - [Declarative examples](examples/declarative/README.md)—public weather,
   authenticated APIs, multi-API bundles, and executable hooks
-- [Getting Started](docs/getting-started.md)—daemon, identities, MCP, A2A, and
-  CLI reference
+- [User Guide](docs/getting-started.md)—AI-agent operation, installation,
+  upgrades, daemon, identities, MCP, A2A, and CLI reference
 - [Building adapters](docs/adapters.md)—custom executable protocol and registry
 - [Architecture and Plan 9](docs/architecture.md)
 - [Security](docs/SECURITY.md)

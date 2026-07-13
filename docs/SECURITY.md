@@ -118,8 +118,8 @@ but consuming agents must still treat upstream text as data rather than trusted
 instructions.
 
 Call inputs, states, results, events, artifacts, adapter registrations,
-providers, ACLs, and the Catalog are stored in SQLite. The current alpha does
-not encrypt the database at rest. Logs and adapter stderr may also contain
+providers, ACLs, and the Catalog are stored in SQLite. The current 0.x release
+does not encrypt the database at rest. Logs and adapter stderr may also contain
 provider diagnostics, so protect and review them.
 
 Persistent call admission is capped at 8 active calls, 1,000 retained calls,
@@ -130,8 +130,16 @@ charged to retained count and bytes. There is no automatic retention cleanup or
 call deletion API, so monitor these limits and archive or replace the state
 database offline before retained capacity is exhausted.
 
-Reading projected files has no provider side effect. After projection, however,
-the files are ordinary filesystem content: NineA no longer mediates access.
-Use separate directories and OS permissions when agents require isolated Skill
-views. Running a projected `scripts/invoke` command crosses back into the
-authenticated NineA runtime and requires `invoke` permission.
+Reading projected files has no provider side effect. NineA never mounts over or
+deletes a user-owned Skill directory. FUSE projections reject write, truncate,
+rename, delete, chmod, and xattr mutation with read-only filesystem semantics.
+
+The portable directory backend uses read-only modes, atomic replacement, and a
+versioned ownership manifest containing path, mode, size, and SHA-256 for every
+file. It detects and repairs drift but is not a security boundary against the
+same OS account or root, which can change its own permissions. Require the FUSE
+backend when kernel-enforced immutability matters.
+
+Running a projected invocation command crosses back into the authenticated
+NineA runtime and requires `invoke` permission. `detach` removes only registry-
+verified managed views and preserves providers, sources, ACLs, and call data.

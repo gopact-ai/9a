@@ -154,13 +154,14 @@ workflows:
 	if _, err := os.Stat(skill); !os.IsNotExist(err) {
 		t.Fatalf("skill remains: %v", err)
 	}
+	runInDir(t, workspace, env, cli, "", "detach")
 }
 
 func runInDir(t *testing.T, dir string, env []string, bin, input string, args ...string) []byte {
 	t.Helper()
 	command := exec.Command(bin, args...)
 	command.Dir = dir
-	command.Env = env
+	command.Env = append(env, "NINEA_AUTO_ATTACH=0")
 	command.Stdin = strings.NewReader(input)
 	output, err := command.CombinedOutput()
 	if err != nil {

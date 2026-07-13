@@ -6,7 +6,7 @@ boundary: discover capabilities, then invoke a selected capability with
 structured input.
 
 > **Availability:** runtime registration of executable adapters is available
-> in the current alpha. Version `9a.adapter/v1` is single-turn; it does not
+> in the current 0.x release. Version `9a.adapter/v1` is single-turn; it does not
 > support streaming or multi-turn continuation.
 
 ## Why executable adapters
@@ -222,7 +222,7 @@ Skill and an invocation command; it never receives the API token.
 ### MCP
 
 The built-in MCP adapter starts a local stdio server, maps `tools/list` to
-discovery, and maps `tools/call` to invocation. The current alpha does not
+discovery, and maps `tools/call` to invocation. The current 0.x release does not
 support HTTP MCP transport. The `stdio:` endpoint must name an absolute
 executable path; NineA resolves symlinks and runs the canonical executable.
 Each invocation has its own process group. Context cancellation, confirmed

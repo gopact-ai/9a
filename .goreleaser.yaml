@@ -16,6 +16,8 @@ builds:
       - arm64
     flags:
       - -trimpath
+    ldflags:
+      - -s -w -X github.com/gopact-ai/9a/internal/buildinfo.Version={{.Version}}
 
   - id: ninea-daemon
     main: ./cmd/ninead
@@ -30,6 +32,8 @@ builds:
       - arm64
     flags:
       - -trimpath
+    ldflags:
+      - -s -w -X github.com/gopact-ai/9a/internal/buildinfo.Version={{.Version}}
 
 archives:
   - id: ninea
