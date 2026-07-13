@@ -1,0 +1,39 @@
+README.md
+  s_90a636a9ddfd26::t_c7b692bd3b3064 153-154
+docs/architecture.md
+  s_90a636a9ddfd26::t_a9bf9d809b699f 99-101
+docs/getting-started.md
+  s_90a636a9ddfd26::t_e8c5dccd34a175 50
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_5b6a14895779cf 143-144
+internal/app/app.go
+  s_90a636a9ddfd26::t_683053208ba831 441-446
+internal/app/local_skills.go
+  s_90a636a9ddfd26::t_549fe15bb5e365 8,27-43,130,148-156,178
+internal/app/local_skills_test.go
+  s_90a636a9ddfd26::t_db2f6c0ddcea74 9,16,29,56-71,83,93,132-137,143-145,151-156
+internal/app/workspaces.go
+  s_90a636a9ddfd26::t_d8c96754aac9f7 12-13
+internal/builtin/skills/using-ninea/SKILL.md
+  s_90a636a9ddfd26::t_e263d8c6e36ec1 13
+internal/catalog/repository.go
+  s_90a636a9ddfd26::t_14c9db5187e3f5 168-175,185-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4771b46c42f0d18d324505757527c32d01b7576f",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
