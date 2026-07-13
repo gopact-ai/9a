@@ -1,14 +1,13 @@
 # User Guide
 
-Install the `9a` client and `ninead` daemon on macOS or Linux with Homebrew:
+Install the single `9a` command on macOS or Linux with Homebrew:
 
 ```sh
 brew install gopact-ai/tap/ninea
 ```
 
 Building from source requires Go 1.25.12 or newer. NineA currently requires a
-platform with Unix domain sockets. The examples below use `openssl` to generate
-a bootstrap token.
+platform with Unix domain sockets.
 
 ## Use NineA through an AI agent
 
@@ -49,7 +48,7 @@ Start from a project directory:
 
 Workspace roots are resolved in the client: `--workspace` wins, then the
 enclosing Git worktree, then the current directory. Absolute canonical paths
-are sent to `ninead`, so the daemon's working directory never changes the
+are sent to the local daemon, so its working directory never changes the
 projection destination.
 
 NineA uses FUSE when available (`/dev/fuse` on Linux or macFUSE on macOS) and
@@ -65,7 +64,7 @@ an effective directory backend to FUSE or vice versa.
 
 `brew upgrade` and `9a update` operate at different layers:
 
-- `brew upgrade gopact-ai/tap/ninea` installs newer `9a` and `ninead` binaries.
+- `brew upgrade gopact-ai/tap/ninea` installs a newer `9a` binary.
 - `9a update --check` previews Catalog and managed Skill changes without
   applying them.
 - `9a update` rediscovers providers, upgrades the built-in `using-ninea` Skill,
@@ -78,9 +77,7 @@ Use this sequence:
 ```sh
 brew update
 brew upgrade gopact-ai/tap/ninea
-
-# Stop the old daemon, then start the new ninead with the same --state and
-# --socket values. Do not set NINEA_BOOTSTRAP_TOKEN again.
+brew services restart ninea # only when using the Homebrew service
 
 9a update --check
 9a update
@@ -94,8 +91,8 @@ archive until the new daemon has started and the workspace status is healthy.
 
 `9a detach` is not an uninstall command. It removes only NineA-managed views
 from the current workspace and leaves user-owned files and daemon state intact.
-To stop using NineA completely, detach the required workspaces, stop `ninead`,
-then uninstall the formula.
+To stop using NineA completely, detach the required workspaces, stop the
+Homebrew service when enabled, then uninstall the formula.
 
 ## Add a JSON API as a Skill
 
@@ -134,15 +131,13 @@ DEMO_DIR="$(mktemp -d)"
 chmod 700 "$DEMO_DIR"
 mkdir -p "$DEMO_DIR/bin" "$DEMO_DIR/skills"
 go build -o "$DEMO_DIR/bin/9a" ./cmd/9a
-go build -o "$DEMO_DIR/bin/ninead" ./cmd/ninead
 go build -o "$DEMO_DIR/bin/mcpfixture" ./testdata/mcpserver
 
 export PATH="$DEMO_DIR/bin:$PATH"
+export HOME="$DEMO_DIR/home"
 export NINEA_SOCKET="$DEMO_DIR/ninea.sock"
-export NINEA_TOKEN="$(openssl rand -hex 32)"
 
-NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
-  --state "$DEMO_DIR/state.db" \
+9a daemon --state "$DEMO_DIR/state.db" \
   --socket "$NINEA_SOCKET" &
 DAEMON_PID=$!
 trap 'kill "$DAEMON_PID" 2>/dev/null || true; rm -rf "$DEMO_DIR"' EXIT
@@ -169,37 +164,45 @@ printf '%s\n' '{"location":"Shanghai"}' | \
 )
 ```
 
-## Run a persistent daemon
+## Daemon lifecycle and local state
 
-Create a private state directory and a bootstrap token. The bootstrap token is
-accepted only when the database has no tokens. Every later daemon start must
-leave `NINEA_BOOTSTRAP_TOKEN` unset.
+Normal commands start the local daemon automatically. The first start creates
+the following private files without changing shell startup files:
 
-```sh
-mkdir -p "$HOME/.local/state/ninea"
-chmod 700 "$HOME/.local/state/ninea"
-umask 077
-export NINEA_SOCKET="$HOME/.local/state/ninea/ninea.sock"
-ADMIN_TOKEN_FILE="$HOME/.local/state/ninea/admin-token"
-test -s "$ADMIN_TOKEN_FILE" || openssl rand -hex 32 >"$ADMIN_TOKEN_FILE"
-export NINEA_TOKEN="$(cat "$ADMIN_TOKEN_FILE")"
-
-NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
-  --state "$HOME/.local/state/ninea/ninea.db" \
-  --socket "$NINEA_SOCKET" \
-  >"$HOME/.local/state/ninea/ninead.log" 2>&1 &
-echo $! >"$HOME/.local/state/ninea/ninead.pid"
+```text
+$HOME/.local/state/ninea/
+├── ninea.db
+├── ninea.sock
+├── admin-token
+├── daemon.log
+├── daemon.pid
+└── daemon.lock
 ```
 
-`NINEA_TOKEN` is a client credential used by `9a`; `ninead` removes it and the
-bootstrap token from its own environment after startup. Provider credentials
-are different: they normally must be present in the `ninead` environment so an
-MCP server or executable adapter can inherit them when its child process
+The directory mode is `0700`; the token and socket modes are `0600`. `9a`
+automatically reads the local socket and token. `NINEA_SOCKET` and
+`NINEA_TOKEN` override them for an explicitly managed deployment.
+
+For a login-independent process, use the Homebrew service:
+
+```sh
+brew services start ninea
+```
+
+`9a daemon --help` documents the foreground service entry point and its
+`--state` and `--socket` overrides. `NINEA_BOOTSTRAP_TOKEN` remains available
+for deployments that supply their own first administrator token; leave it
+unset after the first successful start.
+
+`NINEA_TOKEN` is a client credential used by `9a`; the daemon removes it and
+the bootstrap token from its own environment after startup. Provider
+credentials are different: they must be present in the daemon environment so
+an MCP server or executable adapter can inherit them when its child process
 starts, unless the integration uses an external secret store.
 
 If an integration below needs environment variables, export them before the
-`ninead` command. If the daemon is already running, stop it cleanly and restart
-it from the updated environment without `NINEA_BOOTSTRAP_TOKEN`.
+`9a daemon` process. If the daemon is already running, restart it from the
+updated environment without `NINEA_BOOTSTRAP_TOKEN`.
 
 Create a separate identity token for each agent and grant only the required
 permissions:
@@ -234,7 +237,7 @@ before starting another child process. A synchronous invocation is reported as
 
 The built-in A2A adapter fetches the provider's Agent Card and exposes each
 compatible skill as a Capability. For a bearer-protected provider named
-`research-agent`, start `ninead` with:
+`research-agent`, start the daemon with:
 
 ```sh
 export NINEA_A2A_TOKEN_RESEARCH_AGENT='replace-with-provider-token'
@@ -259,7 +262,7 @@ workflows, then materialize the entire domain as one Skill:
 
 ```sh
 export PLATFORM_API_TOKEN='replace-with-provider-token'
-# Restart ninead from this environment, then:
+# Restart `9a daemon` from this environment, then:
 9a add examples/declarative/api-bundle.yaml
 ```
 
@@ -344,7 +347,9 @@ powershell.
 
 ## Common failures
 
-- **Cannot connect:** confirm `ninead` is running and `NINEA_SOCKET` matches.
+- **Daemon did not start:** inspect
+  `$HOME/.local/state/ninea/daemon.log`; `NINEA_SOCKET` must match any explicit
+  service configuration.
 - **`unauthorized`:** set `NINEA_TOKEN` to a token issued for this identity.
 - **Bootstrap failure on restart:** unset `NINEA_BOOTSTRAP_TOKEN` after the
   first successful start.

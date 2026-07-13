@@ -12,7 +12,7 @@ Use an absolute executable path for a local stdio server:
 
 ## A2A
 
-Start `ninead` with the provider token in
+Start `9a daemon` with the provider token in
 `NINEA_A2A_TOKEN_<NORMALIZED_PROVIDER_NAME>`, then register the HTTPS endpoint:
 
 ```sh

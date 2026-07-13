@@ -97,19 +97,19 @@ perform actions. Read [Architecture and Plan 9](docs/architecture.md).
 
 ## 📦 Install
 
-Homebrew installs the `9a` client and `ninead` daemon on macOS or Linux:
+Homebrew installs one `9a` command on macOS or Linux:
 
 ```sh
 brew install gopact-ai/tap/ninea
 ```
 
-Upgrade both commands with:
+Upgrade it with:
 
 ```sh
 brew upgrade gopact-ai/tap/ninea
 ```
 
-Confirm which client Homebrew placed on `PATH`, and explore complete command
+Confirm which version Homebrew placed on `PATH`, and explore complete command
 arguments without starting the daemon:
 
 ```sh
@@ -118,31 +118,28 @@ arguments without starting the daemon:
 9a help calls events
 ```
 
-After upgrading, restart `ninead` with the same state database and socket, then
-run `9a update --check` and `9a update` to refresh the built-in Skill and the
-current workspace's managed views. Use `9a update --all` only when every
-attached workspace should be reconciled. See
+After upgrading, restart a Homebrew-managed service with
+`brew services restart ninea`, then run `9a update --check` and `9a update` to
+refresh the built-in Skill and the current workspace's managed views. Use
+`9a update --all` only when every attached workspace should be reconciled. See
 [Upgrade NineA](docs/getting-started.md#upgrade-ninea) for the safe sequence and
 the distinction between a software upgrade and a workspace update.
 
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) provides archives
 and SHA-256 checksums for macOS and Linux on x86-64 and ARM64.
 
-On the first daemon start, create an administrator token:
+From a workspace, run one command:
 
 ```sh
-export NINEA_SOCKET="$HOME/.local/state/ninea/ninea.sock"
-export NINEA_TOKEN="$(openssl rand -hex 32)"
-mkdir -p "$(dirname "$NINEA_SOCKET")"
-NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
-  --state "$HOME/.local/state/ninea/ninea.db" \
-  --socket "$NINEA_SOCKET"
+9a attach
 ```
 
-Leave `NINEA_BOOTSTRAP_TOKEN` unset on later starts. The
-[User Guide](docs/getting-started.md) covers AI-agent operation, persistent
-startup, upgrades, separate agent identities, ACLs, MCP, A2A, and the complete
-command reference.
+`9a` starts its local daemon when needed, creates a private state directory,
+and generates the first administrator token automatically. It reads the socket
+and token from `$HOME/.local/state/ninea`, so shell configuration is not
+required. `NINEA_SOCKET` and `NINEA_TOKEN` remain explicit overrides. The
+[User Guide](docs/getting-started.md) covers persistent startup, upgrades,
+separate agent identities, ACLs, MCP, A2A, and the complete command reference.
 
 From a workspace, the normal agent workflow starts automatically:
 

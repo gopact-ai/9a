@@ -39,10 +39,10 @@ func newRootCommand(c *cli) *cobra.Command {
 		Use:   "9a",
 		Short: "Expose external capabilities as local, agent-ready Skills",
 		Long: `9a manages workspaces, declarative Skills, providers, permissions, and
-capability invocations through the local ninead daemon.
+capability invocations through a local daemon that starts automatically.
 
 Run "9a <command> --help" to see every positional argument, flag, and example
-for a command. Help, completion, version, and validation do not require ninead.`,
+for a command. Help, completion, version, and validation do not start it.`,
 		Example: `  9a attach
   9a search "weather forecast"
   printf '%s\n' '{"city":"Shanghai"}' | 9a invoke mcp/weather/forecast`,
@@ -66,6 +66,7 @@ for a command. Help, completion, version, and validation do not require ninead.`
 	)
 	root.SetHelpCommandGroupID(utilityGroup)
 	root.SetCompletionCommandGroupID(utilityGroup)
+	paths, _ := defaultLocalPaths()
 	root.AddCommand(
 		c.newAttachCommand(),
 		c.newStatusCommand(),
@@ -97,6 +98,7 @@ for a command. Help, completion, version, and validation do not require ninead.`
 		c.newCallsCommand(),
 		newCompletionCommand(),
 		newVersionCommand(),
+		newDaemonCommand(paths),
 	)
 	return root
 }
@@ -658,9 +660,9 @@ func newCompletionCommand() *cobra.Command {
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "version",
-		Short:   "Print the client version",
+		Short:   "Print the 9a version",
 		GroupID: utilityGroup,
-		Long:    "Print the embedded 9a client version. Published binaries receive this value from the release tag.",
+		Long:    "Print the embedded 9a version. Published binaries receive this value from the release tag.",
 		Example: "  9a version",
 		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {

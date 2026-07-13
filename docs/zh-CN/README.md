@@ -92,19 +92,19 @@ A2A client、API SDK、凭证处理或厂商专用工具注册表。
 
 ## 📦 安装和启动
 
-Homebrew 会在 macOS 或 Linux 上安装 `9a` client 和 `ninead` daemon：
+Homebrew 会在 macOS 或 Linux 上安装唯一的 `9a` 命令：
 
 ```sh
 brew install gopact-ai/tap/ninea
 ```
 
-升级 client 和 daemon：
+升级 `9a`：
 
 ```sh
 brew upgrade gopact-ai/tap/ninea
 ```
 
-可用以下命令确认 Homebrew 放到 `PATH` 中的 client 版本，并在不启动 daemon 的
+可用以下命令确认 Homebrew 放到 `PATH` 中的版本，并在不启动 daemon 的
 情况下查看完整参数：
 
 ```sh
@@ -113,7 +113,7 @@ brew upgrade gopact-ai/tap/ninea
 9a help calls events
 ```
 
-升级后使用原来的 state database 和 socket 重启 `ninead`，再执行
+升级后，使用 Homebrew service 的用户执行 `brew services restart ninea`，再执行
 `9a update --check` 预览变化，执行 `9a update` 刷新内置 Skill 和当前 workspace 的
 托管视图。软件升级与 workspace 更新的完整区别见英文
 [Upgrade NineA](../getting-started.md#upgrade-ninea)。
@@ -121,20 +121,17 @@ brew upgrade gopact-ai/tap/ninea
 [GitHub Releases](https://github.com/gopact-ai/9a/releases) 提供 macOS 和 Linux 的
 x86-64、ARM64 归档及 SHA-256 校验文件。
 
-第一次启动 daemon 时创建管理员 token：
+在 workspace 中只需执行：
 
 ```sh
-export NINEA_SOCKET="$HOME/.local/state/ninea/ninea.sock"
-export NINEA_TOKEN="$(openssl rand -hex 32)"
-mkdir -p "$(dirname "$NINEA_SOCKET")"
-NINEA_BOOTSTRAP_TOKEN="$NINEA_TOKEN" ninead \
-  --state "$HOME/.local/state/ninea/ninea.db" \
-  --socket "$NINEA_SOCKET"
+9a attach
 ```
 
-后续启动必须取消 `NINEA_BOOTSTRAP_TOKEN`。英文
-[User Guide](../getting-started.md) 介绍 AI Agent 使用方式、持久化启动、版本升级、独立
-Agent 身份、ACL、MCP、A2A 和完整命令参考。
+`9a` 会按需启动本地 daemon，首次启动时自动创建私有 state 目录和管理员 token。
+socket 与 token 默认从 `$HOME/.local/state/ninea` 读取，无需修改 shell 配置；
+`NINEA_SOCKET` 和 `NINEA_TOKEN` 仍可显式覆盖。英文
+[User Guide](../getting-started.md) 介绍持久化启动、版本升级、独立 Agent 身份、ACL、
+MCP、A2A 和完整命令参考。
 
 ```sh
 9a search "weather"

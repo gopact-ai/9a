@@ -19,27 +19,10 @@ builds:
     ldflags:
       - -s -w -X github.com/gopact-ai/9a/internal/buildinfo.Version={{.Version}}
 
-  - id: ninea-daemon
-    main: ./cmd/ninead
-    binary: ninead
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - darwin
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w -X github.com/gopact-ai/9a/internal/buildinfo.Version={{.Version}}
-
 archives:
   - id: ninea
     ids:
       - ninea-cli
-      - ninea-daemon
     formats:
       - tar.gz
     name_template: >-

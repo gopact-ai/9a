@@ -31,6 +31,18 @@ func socketPath(t *testing.T) string {
 	t.Cleanup(func() { _ = os.Remove(path) })
 	return path
 }
+
+func isolatedEnv(home string, overrides ...string) []string {
+	env := make([]string, 0, len(os.Environ())+len(overrides)+1)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "NINEA_") || strings.HasPrefix(value, "HOME=") {
+			continue
+		}
+		env = append(env, value)
+	}
+	return append(env, append([]string{"HOME=" + home}, overrides...)...)
+}
+
 func run(t *testing.T, env []string, bin string, input string, args ...string) []byte {
 	t.Helper()
 	if len(args) == 4 && args[0] == "project" && args[1] == "add" {
@@ -76,15 +88,14 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	_ = os.Mkdir(bin, 0755)
-	cli, daemon, fixture := filepath.Join(bin, "9a"), filepath.Join(bin, "ninead"), filepath.Join(bin, "mcpfixture")
+	cli, fixture := filepath.Join(bin, "9a"), filepath.Join(bin, "mcpfixture")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	build(t, fixture, "./testdata/mcpserver")
 	socket := socketPath(t)
 	token := "e2e-secret"
 	counter := filepath.Join(root, "provider-calls")
-	adminEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "PATH="+bin+":"+os.Getenv("PATH"), "NINEA_FIXTURE_COUNTER="+counter)
-	d := exec.Command(daemon, "--state", filepath.Join(root, "state.db"), "--socket", socket)
+	adminEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "PATH="+bin+":"+os.Getenv("PATH"), "NINEA_FIXTURE_COUNTER="+counter)
+	d := exec.Command(cli, "daemon", "--state", filepath.Join(root, "state.db"), "--socket", socket)
 	d.Env = append(adminEnv, "NINEA_BOOTSTRAP_TOKEN="+token)
 	var logs bytes.Buffer
 	d.Stderr = &logs
@@ -110,7 +121,7 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 		t.Fatalf("malformed provider result=%s", out)
 	}
 	agentToken := strings.TrimSpace(string(run(t, adminEnv, cli, "", "tokens", "create", "agent")))
-	agentEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken, "PATH="+bin+":"+os.Getenv("PATH"))
+	agentEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken, "PATH="+bin+":"+os.Getenv("PATH"))
 	if out := runFails(t, agentEnv, cli, "", "acl", "grant", "agent", "mcp/weather/get-weather", "invoke"); !bytes.Contains(out, []byte("permission_denied")) {
 		t.Fatalf("self grant=%s", out)
 	}
@@ -151,7 +162,7 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 	}
 	_ = d.Wait()
 	_ = os.Remove(socket)
-	d2 := exec.Command(daemon, "--state", filepath.Join(root, "state.db"), "--socket", socket)
+	d2 := exec.Command(cli, "daemon", "--state", filepath.Join(root, "state.db"), "--socket", socket)
 	d2.Env = adminEnv
 	d2.Stderr = &logs
 	if err := d2.Start(); err != nil {
@@ -186,12 +197,11 @@ func TestMCPDiscoverySearchProjectionAndInvoke(t *testing.T) {
 
 func TestDaemonRejectsMissingToken(t *testing.T) {
 	root := t.TempDir()
-	cli, daemon := filepath.Join(root, "9a"), filepath.Join(root, "ninead")
+	cli := filepath.Join(root, "9a")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	socket := socketPath(t)
-	d := exec.Command(daemon, "--state", filepath.Join(root, "s.db"), "--socket", socket)
-	d.Env = append(os.Environ(), "NINEA_BOOTSTRAP_TOKEN=right")
+	d := exec.Command(cli, "daemon", "--state", filepath.Join(root, "s.db"), "--socket", socket)
+	d.Env = isolatedEnv(filepath.Join(root, "home"), "NINEA_BOOTSTRAP_TOKEN=right")
 	if err := d.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +213,7 @@ func TestDaemonRejectsMissingToken(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	c := exec.Command(cli, "search", "weather")
-	c.Env = append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN=wrong")
+	c.Env = isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN=wrong")
 	b, err := c.CombinedOutput()
 	if err == nil || !bytes.Contains(b, []byte("unauthorized")) {
 		t.Fatalf("wrong token result err=%v output=%s", err, b)

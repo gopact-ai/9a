@@ -20,6 +20,15 @@ require_text() {
 	fi
 }
 
+reject_text() {
+	file=$1
+	text=$2
+	if grep -Fq -- "$text" "$file"; then
+		printf '%s contains retired release contract: %s\n' "$file" "$text" >&2
+		exit 1
+	fi
+}
+
 require_file .goreleaser.yaml
 require_file .github/workflows/release.yml
 require_file .github/workflows/go-ci.yml
@@ -34,9 +43,7 @@ require_text .gitignore 'dist/'
 
 for text in \
 	'binary: 9a' \
-	'binary: ninead' \
 	'./cmd/9a' \
-	'./cmd/ninead' \
 	'darwin' \
 	'linux' \
 	'amd64' \
@@ -46,6 +53,13 @@ for text in \
 do
 	require_text .goreleaser.yaml "$text"
 done
+
+reject_text .goreleaser.yaml 'binary: ninead'
+reject_text .goreleaser.yaml './cmd/ninead'
+if [ "$(grep -c '^[[:space:]]*binary:' .goreleaser.yaml)" -ne 1 ]; then
+	echo '.goreleaser.yaml must publish exactly one binary' >&2
+	exit 1
+fi
 
 require_text .github/workflows/release.yml 'workflow_run:'
 require_text .github/workflows/release.yml 'workflows: [go]'

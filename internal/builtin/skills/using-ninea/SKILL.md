@@ -24,7 +24,7 @@ editing projected files.
 
 Prefer projected invoke commands over constructing direct provider requests.
 Do not place credentials in YAML, prompts, command arguments, or projected
-files; provide them to `ninead` through its environment.
+files; provide them to `9a daemon` through its environment.
 
 ## Fast path
 

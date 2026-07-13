@@ -2,10 +2,29 @@ package authn
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gopact-ai/9a/internal/store"
 )
+
+func TestNewTokenReturnsUniqueNineaTokens(t *testing.T) {
+	t.Parallel()
+	first, err := NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(first, "ninea_") || !strings.HasPrefix(second, "ninea_") {
+		t.Fatalf("NewToken() returned %q and %q", first, second)
+	}
+	if first == second {
+		t.Fatalf("NewToken() returned duplicate token %q", first)
+	}
+}
 
 func TestCreateAndAuthenticateStoresOnlyHash(t *testing.T) {
 	t.Parallel()

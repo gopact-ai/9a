@@ -45,7 +45,7 @@ because the source is already the operator-reviewed capability declaration.
 The built-in MCP and A2A adapters discover capabilities from live upstream
 systems. Separately installed protocol integrations use the
 `9a.adapter/v1` executable contract, so they can be written in any language,
-registered without recompiling `ninead`, and isolated as separate processes.
+registered without rebuilding NineA, and isolated as separate processes.
 The generic HTTP adapter is a legacy example of this external executable model;
 new JSON API integrations should normally use declarative YAML.
 
@@ -162,7 +162,7 @@ Discovery, reading, and execution are separate operations:
 - `admin` permits adapter, provider, token, and ACL management.
 
 Reading a projected Skill has no upstream side effect. The invocation script
-sends structured input to `ninead`, which authenticates the caller, checks the
+sends structured input to `9a daemon`, which authenticates the caller, checks the
 Capability ACL, locates the originating provider, and routes the call through
 its adapter.
 
@@ -289,7 +289,7 @@ ordering, derive Capabilities, then persist them through the same Catalog.
 
 1. The agent reads the Skill and prepares JSON input.
 2. The agent explicitly runs `scripts/invoke`.
-3. `ninead` authenticates the token and checks `invoke` permission.
+3. `9a daemon` authenticates the token and checks `invoke` permission.
 4. NineA routes the request through the Capability's adapter and provider.
 5. The adapter translates the upstream result into a structured NineA result.
 

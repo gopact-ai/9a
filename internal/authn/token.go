@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -25,13 +26,20 @@ func TokenDigest(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Service) Create(ctx context.Context, identity string) (string, error) {
+func NewToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+	return "ninea_" + base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func (s *Service) Create(ctx context.Context, identity string) (string, error) {
+	token, err := NewToken()
+	if err != nil {
 		return "", err
 	}
-	token := "ninea_" + base64.RawURLEncoding.EncodeToString(buf)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tokens(token_hash,identity_id,created_at) VALUES(?,?,?)`, TokenDigest(token), identity, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO tokens(token_hash,identity_id,created_at) VALUES(?,?,?)`, TokenDigest(token), identity, time.Now().UTC().Format(time.RFC3339Nano))
 	return token, err
 }
 

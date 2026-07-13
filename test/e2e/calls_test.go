@@ -64,18 +64,17 @@ func TestExecutableAsyncCallsCLIAndRestartRecovery(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	_ = os.Mkdir(bin, 0755)
-	cli, daemon, fixture := filepath.Join(bin, "9a"), filepath.Join(bin, "ninead"), filepath.Join(bin, "execfixture")
+	cli, fixture := filepath.Join(bin, "9a"), filepath.Join(bin, "execfixture")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	build(t, fixture, "./testdata/executableadapter")
 	socket := socketPath(t)
 	state := filepath.Join(root, "state.db")
 	token := "async-e2e-secret"
 	pids := filepath.Join(root, "fixture-pids")
-	adminEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "NINEA_ASYNC_FIXTURE_PIDS="+pids)
+	adminEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "NINEA_ASYNC_FIXTURE_PIDS="+pids)
 	var logs bytes.Buffer
 	startDaemon := func(bootstrap bool) *exec.Cmd {
-		d := exec.Command(daemon, "--state", state, "--socket", socket)
+		d := exec.Command(cli, "daemon", "--state", state, "--socket", socket)
 		d.Env = adminEnv
 		if bootstrap {
 			d.Env = append(d.Env, "NINEA_BOOTSTRAP_TOKEN="+token)
@@ -93,8 +92,8 @@ func TestExecutableAsyncCallsCLIAndRestartRecovery(t *testing.T) {
 	run(t, adminEnv, cli, "", "providers", "add", "exec", "demo", "local")
 	agentToken := strings.TrimSpace(string(run(t, adminEnv, cli, "", "tokens", "create", "agent")))
 	otherToken := strings.TrimSpace(string(run(t, adminEnv, cli, "", "tokens", "create", "other")))
-	agentEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
-	otherEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+otherToken)
+	agentEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
+	otherEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+otherToken)
 	run(t, adminEnv, cli, "", "acl", "grant", "agent", "exec/demo/async", "invoke")
 	completedID := strings.TrimSpace(string(run(t, agentEnv, cli, `{"block":false}`, "calls", "start", "exec/demo/async")))
 	completed := waitCall(t, agentEnv, cli, completedID, "completed")

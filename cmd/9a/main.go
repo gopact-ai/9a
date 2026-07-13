@@ -182,15 +182,26 @@ func (e *rpcError) Error() string {
 	return e.code + ": " + e.message
 }
 
-func callRPC(q api.Request) (json.RawMessage, error) {
-	socket := os.Getenv("NINEA_SOCKET")
+func localRPCConfig(getenv func(string) string, paths localPaths) (string, string, error) {
+	socket := getenv("NINEA_SOCKET")
 	if socket == "" {
-		socket = "/tmp/ninea.sock"
+		socket = paths.socket
 	}
-	body, err := json.Marshal(q)
-	if err != nil {
-		return nil, err
+	token := getenv("NINEA_TOKEN")
+	if token == "" {
+		var err error
+		token, err = loadToken(paths.token)
+		if os.IsNotExist(err) {
+			return socket, "", nil
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("read local admin token: %w", err)
+		}
 	}
+	return socket, token, nil
+}
+
+func doRPC(body []byte, socket, token string) (json.RawMessage, error) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
 	}}
@@ -199,7 +210,9 @@ func callRPC(q api.Request) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("NINEA_TOKEN"))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := (&http.Client{Transport: transport, Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
@@ -220,6 +233,33 @@ func callRPC(q api.Request) (json.RawMessage, error) {
 		return nil, &rpcError{code: out.Code, message: out.Error, data: out.Data}
 	}
 	return out.Data, nil
+}
+
+func callRPC(q api.Request) (json.RawMessage, error) {
+	paths, err := defaultLocalPaths()
+	if err != nil {
+		return nil, err
+	}
+	socket, token, err := localRPCConfig(os.Getenv, paths)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(q)
+	if err != nil {
+		return nil, err
+	}
+	data, err := doRPC(body, socket, token)
+	if !daemonUnavailable(err) {
+		return data, err
+	}
+	if err := startLocalDaemon(paths, socket); err != nil {
+		return nil, fmt.Errorf("start local daemon: %w; log: %s", err, paths.log)
+	}
+	_, token, err = localRPCConfig(os.Getenv, paths)
+	if err != nil {
+		return nil, err
+	}
+	return doRPC(body, socket, token)
 }
 
 func main() {

@@ -1,7 +1,7 @@
 # Declarative API Skills
 
 Use declarative YAML for JSON HTTP APIs. Keep secrets in environment variables
-inherited by `ninead`.
+inherited by `9a daemon`.
 
 ```yaml
 apiVersion: 9a.dev/v1alpha1
