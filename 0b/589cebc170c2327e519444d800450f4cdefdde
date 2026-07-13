@@ -1,0 +1,23 @@
+README.md
+  s_90a636a9ddfd26::t_5e22d6b0cc363a 122-125
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_0de40f5908cd53 116-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0b589cebc170c2327e519444d800450f4cdefdde",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
