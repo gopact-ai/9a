@@ -1,0 +1,33 @@
+cmd/9a/commands.go
+  s_90a636a9ddfd26::t_9cbf273d911aa2 10,12,347-349,351,402-406,410-415,419-421,423
+cmd/9a/main.go
+  s_90a636a9ddfd26::t_c030c4534715d8 226-229
+docs/getting-started.md
+  s_90a636a9ddfd26::t_3370c034cd607d 334
+internal/app/app.go
+  s_90a636a9ddfd26::t_61792d805c6a7c 10,418-436
+internal/app/app_test.go
+  s_90a636a9ddfd26::t_ba085931081e18 7,30-61
+internal/authz/service.go
+  s_90a636a9ddfd26::t_a1c6dea9e91abf 6-7,19-41,51-53
+internal/authz/service_test.go
+  s_90a636a9ddfd26::t_d786ce87d50092 70-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "344378fc7f9feec8613006493127158229614093",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
