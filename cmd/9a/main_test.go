@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -197,6 +196,10 @@ func executeTestCommand(t *testing.T, c *cli, args []string, stdin string) (stri
 }
 
 func TestCLIValidatesBeforeCallingDaemon(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "adapter")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name  string
 		args  []string
@@ -208,8 +211,11 @@ func TestCLIValidatesBeforeCallingDaemon(t *testing.T) {
 		{"conflicting update modes", []string{"update", "--check", "--all"}, "", []string{"check", "all"}},
 		{"zero event limit", []string{"calls", "events", "call-1", "--limit", "0"}, "", []string{"--limit", "greater than zero"}},
 		{"relative adapter", []string{"adapters", "add", "billing", "bin/adapter"}, "", []string{"absolute", "bin/adapter"}},
+		{"reserved adapter protocol", []string{"adapters", "add", "mcp", executable}, "", []string{"protocol", "reserved"}},
 		{"malformed input", []string{"invoke", "echo/demo/echo"}, `{"missing":`, []string{"valid JSON"}},
 		{"invalid search format", []string{"search", "weather", "--format", "yaml"}, "", []string{"--format", "json"}},
+		{"invalid permission", []string{"acl", "grant", "agent", "echo/demo/echo", "read,invkoe"}, "", []string{"permission", "invkoe"}},
+		{"empty identity", []string{"acl", "grant", "", "echo/demo/echo", "read"}, "", []string{"identity", "non-empty"}},
 		{"command typo", []string{"attch"}, "", []string{"Did you mean", "attach"}},
 	}
 
@@ -358,12 +364,6 @@ func TestVersionCommandAndFlagAgreeWithoutDaemon(t *testing.T) {
 }
 
 func TestHelpDocumentsEveryCommandWithoutDaemon(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "9a")
-	build := exec.Command("go", "build", "-o", binary, ".")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build 9a: %v\n%s", err, out)
-	}
-
 	tests := []struct {
 		args []string
 		want []string
@@ -384,7 +384,7 @@ func TestHelpDocumentsEveryCommandWithoutDaemon(t *testing.T) {
 		{[]string{"help", "adapters", "add"}, []string{"9a adapters add <protocol> <absolute-executable>"}},
 		{[]string{"help", "providers", "add"}, []string{"9a providers add <protocol> <name> <endpoint>"}},
 		{[]string{"help", "providers", "remove"}, []string{"9a providers remove <protocol> <name>"}},
-		{[]string{"help", "acl", "grant"}, []string{"9a acl grant <identity> <capability> <permissions>", "comma-separated"}},
+		{[]string{"help", "acl", "grant"}, []string{"9a acl grant <identity> <capability> <permissions>", "comma-separated", "read", "invoke", "write", "admin"}},
 		{[]string{"help", "tokens", "create"}, []string{"9a tokens create <identity>"}},
 		{[]string{"help", "search"}, []string{"9a search <query...>", "--format"}},
 		{[]string{"help", "project", "add"}, []string{"9a project add <capability> <skills-root>"}},
@@ -394,16 +394,26 @@ func TestHelpDocumentsEveryCommandWithoutDaemon(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		command := exec.Command(binary, test.args...)
-		command.Env = append(os.Environ(), "NINEA_SOCKET="+filepath.Join(t.TempDir(), "missing.sock"))
-		out, err := command.CombinedOutput()
+		calls := 0
+		c := &cli{
+			cwd: t.TempDir(),
+			call: func(api.Request) (json.RawMessage, error) {
+				calls++
+				return nil, nil
+			},
+			getenv: func(string) string { return "" },
+		}
+		out, err := executeTestCommand(t, c, test.args, "")
 		if err != nil {
 			t.Fatalf("9a %s: %v\n%s", strings.Join(test.args, " "), err, out)
 		}
 		for _, want := range test.want {
-			if !bytes.Contains(out, []byte(want)) {
+			if !strings.Contains(out, want) {
 				t.Fatalf("9a %s help missing %q:\n%s", strings.Join(test.args, " "), want, out)
 			}
+		}
+		if calls != 0 {
+			t.Fatalf("9a %s help contacted daemon %d times", strings.Join(test.args, " "), calls)
 		}
 	}
 }

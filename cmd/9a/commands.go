@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/api"
+	"github.com/gopact-ai/9a/internal/authz"
 	"github.com/gopact-ai/9a/internal/buildinfo"
 	workspacepkg "github.com/gopact-ai/9a/internal/workspace"
 	"github.com/spf13/cobra"
@@ -342,10 +344,11 @@ func (c *cli) newAdaptersCommand() *cobra.Command {
 		Example: "  9a adapters add billing /opt/ninea/billing-adapter",
 		Args:    exactArgs("<protocol> <absolute-executable>", 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !filepath.IsAbs(args[1]) {
-				return fmt.Errorf("<absolute-executable> must be an absolute path: %q", args[1])
+			canonical, err := adapterreg.ValidateRegistration(args[0], args[1])
+			if err != nil {
+				return fmt.Errorf("invalid adapter %q: %w", args[1], err)
 			}
-			request := adapterAddRequest(args[0], args[1])
+			request := adapterAddRequest(args[0], canonical)
 			return c.runRequestInCurrentWorkspace(cmd, request, false)
 		},
 	})
@@ -396,18 +399,28 @@ func (c *cli) newACLCommand() *cobra.Command {
 		RunE:    helpOnly,
 	}
 	parent.AddCommand(&cobra.Command{
-		Use:     "grant <identity> <capability> <permissions>",
-		Short:   "Grant capability permissions",
-		Long:    "Grant one or more comma-separated permissions to an identity for one capability.",
+		Use:   "grant <identity> <capability> <permissions>",
+		Short: "Grant capability permissions",
+		Long: `Grant one or more comma-separated permissions to an identity for one capability.
+
+Supported permissions are read, invoke, write, and admin.`,
 		Example: "  9a acl grant support-agent api/orders/get-order read,invoke",
 		Args:    exactArgs("<identity> <capability> <permissions>", 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(args[0]) == "" {
+				return fmt.Errorf("<identity> must be non-empty")
+			}
+			if strings.TrimSpace(args[1]) == "" {
+				return fmt.Errorf("<capability> must be non-empty")
+			}
 			permissions := strings.Split(args[2], ",")
 			for i := range permissions {
 				permissions[i] = strings.TrimSpace(permissions[i])
-				if permissions[i] == "" {
-					return fmt.Errorf("<permissions> must be a comma-separated list without empty values")
+				permission, err := authz.ParsePermission(permissions[i])
+				if err != nil {
+					return err
 				}
+				permissions[i] = string(permission)
 			}
 			request := api.Request{Action: "acl.grant", Identity: args[0], Capability: args[1], Permissions: permissions}
 			return c.runRequest(cmd, request, false, "")

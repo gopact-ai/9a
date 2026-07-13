@@ -331,7 +331,7 @@ powershell.
 | `9a update [--workspace PATH] [--check\|--all]` | Rediscover providers and reconcile managed views | `admin` |
 | `9a detach [--workspace PATH]` | Remove only this workspace's managed view | authenticated identity |
 | `9a tokens create <identity>` | Create a bearer token for an identity | `admin` |
-| `9a acl grant <identity> <capability> <permissions>` | Grant comma-separated permissions | `admin` |
+| `9a acl grant <identity> <capability> <permissions>` | Grant comma-separated `read`, `invoke`, `write`, or `admin` permissions | `admin` |
 | `9a search <query...> [--format json]` | Search visible capabilities as JSON; unquoted words are joined | capability `read` |
 | `9a project add <capability> <skills-root>` | Materialize one filesystem Skill | capability `read` |
 | `9a invoke <capability>` | Read up to 8 MiB of JSON and wait with a 30-second CLI timeout | capability `invoke` |

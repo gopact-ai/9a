@@ -223,11 +223,10 @@ func callRPC(q api.Request) (json.RawMessage, error) {
 }
 
 func main() {
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
+	// Commands that need a workspace resolve it when they run. Keeping an empty
+	// cwd here lets help, version, completion, and absolute-path validation work
+	// even if the process's current directory was removed.
+	cwd, _ := os.Getwd()
 	root := newRootCommand(newCLI(cwd))
 	root.SetIn(os.Stdin)
 	root.SetOut(os.Stdout)

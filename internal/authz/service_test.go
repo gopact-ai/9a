@@ -67,3 +67,32 @@ func TestGrantIfAbsentReportsOwnership(t *testing.T) {
 		t.Fatalf("second created=%v err=%v", created, err)
 	}
 }
+
+func TestGrantRejectsInvalidInputs(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/ninea.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db)
+	for _, test := range []struct {
+		identity, capability string
+		permission           Permission
+	}{
+		{"", "cap", Read},
+		{"agent", "", Read},
+		{"agent", "cap", Permission("invkoe")},
+	} {
+		if err := s.Grant(ctx, test.identity, test.capability, test.permission); err == nil {
+			t.Fatalf("Grant(%q, %q, %q) accepted invalid input", test.identity, test.capability, test.permission)
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM acl`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("invalid grants persisted %d ACL rows", count)
+	}
+}
