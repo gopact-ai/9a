@@ -223,9 +223,9 @@ func callRPC(q api.Request) (json.RawMessage, error) {
 }
 
 func main() {
-	// Commands that need a workspace resolve it when they run. Keeping an empty
-	// cwd here lets help, version, completion, and absolute-path validation work
-	// even if the process's current directory was removed.
+	// Commands that need a workspace resolve it when they run. Ignoring Getwd
+	// here keeps workspace-independent commands usable if the current directory
+	// was removed and lets other commands report argument errors first.
 	cwd, _ := os.Getwd()
 	root := newRootCommand(newCLI(cwd))
 	root.SetIn(os.Stdin)
