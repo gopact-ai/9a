@@ -37,9 +37,8 @@ func TestDeclarativeSkillCLIProjectionWorkflowAndRestart(t *testing.T) {
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cli, daemon := filepath.Join(bin, "9a"), filepath.Join(bin, "ninead")
+	cli := filepath.Join(bin, "9a")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	workspace := filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o755); err != nil {
 		t.Fatal(err)
@@ -99,14 +98,14 @@ workflows:
 	}
 	socket := socketPath(t)
 	token := "declarative-e2e-admin"
-	env := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "CITY_CLIENT=e2e-client", "PATH="+bin+":"+os.Getenv("PATH"))
+	env := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "CITY_CLIENT=e2e-client", "PATH="+bin+":"+os.Getenv("PATH"))
 	if output := runInDir(t, workspace, env, cli, "", "validate", sourcePath); !bytes.Contains(output, []byte(`"valid":true`)) {
 		t.Fatalf("validate=%s", output)
 	}
 	state := filepath.Join(root, "state.db")
 	var logs bytes.Buffer
 	start := func(bootstrap bool) *exec.Cmd {
-		command := exec.Command(daemon, "--state", state, "--socket", socket)
+		command := exec.Command(cli, "daemon", "--state", state, "--socket", socket)
 		command.Env = env
 		if bootstrap {
 			command.Env = append(command.Env, "NINEA_BOOTSTRAP_TOKEN="+token)

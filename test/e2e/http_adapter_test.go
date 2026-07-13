@@ -57,9 +57,8 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cli, daemon, adapter := filepath.Join(bin, "9a"), filepath.Join(bin, "ninead"), filepath.Join(bin, "http-adapter")
+	cli, adapter := filepath.Join(bin, "9a"), filepath.Join(bin, "http-adapter")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	build(t, adapter, "./examples/http-adapter")
 	manifestPath := filepath.Join(root, "manifest.json")
 	manifest := map[string]any{
@@ -86,7 +85,7 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	invalid := exec.Command(adapter)
-	invalid.Env = append(os.Environ(), "NINEA_HTTP_ADAPTER_MANIFEST="+invalidManifest)
+	invalid.Env = isolatedEnv(filepath.Join(root, "home"), "NINEA_HTTP_ADAPTER_MANIFEST="+invalidManifest)
 	if output, err := invalid.CombinedOutput(); err == nil || bytes.Contains(output, []byte("provider-http-secret")) {
 		t.Fatalf("invalid manifest error=%v output=%s", err, output)
 	}
@@ -94,10 +93,10 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	socket := socketPath(t)
 	state := filepath.Join(root, "state.db")
 	adminToken := "http-e2e-admin"
-	adminEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+adminToken, "NINEA_HTTP_ADAPTER_MANIFEST="+manifestPath, "NINEA_HTTP_TOKEN_HTTP_API=provider-http-secret")
+	adminEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+adminToken, "NINEA_HTTP_ADAPTER_MANIFEST="+manifestPath, "NINEA_HTTP_TOKEN_HTTP_API=provider-http-secret")
 	var logs bytes.Buffer
 	startDaemon := func(bootstrap bool) *exec.Cmd {
-		command := exec.Command(daemon, "--state", state, "--socket", socket)
+		command := exec.Command(cli, "daemon", "--state", state, "--socket", socket)
 		command.Env = adminEnv
 		if bootstrap {
 			command.Env = append(command.Env, "NINEA_BOOTSTRAP_TOKEN="+adminToken)
@@ -113,7 +112,7 @@ func TestHTTPAdapterDiscoveryInvokeAsyncAuthAndRestart(t *testing.T) {
 	t.Cleanup(func() { _ = d.Process.Kill(); _ = d.Wait() })
 
 	agentToken := strings.TrimSpace(string(run(t, adminEnv, cli, "", "tokens", "create", "agent")))
-	agentEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
+	agentEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
 	if output := runFails(t, agentEnv, cli, "", "adapters", "add", "denied-http", adapter); !bytes.Contains(output, []byte("permission_denied")) {
 		t.Fatalf("non-admin adapter registration=%s", output)
 	}

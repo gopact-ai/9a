@@ -19,7 +19,7 @@ test-e2e:
 	$(GO) test -count=1 ./test/e2e
 
 build:
-	$(GO) build ./cmd/...
+	$(GO) build -o /dev/null ./cmd/9a
 
 docs-check:
 	./scripts/docs-check.sh all

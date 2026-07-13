@@ -18,18 +18,17 @@ func TestManagedSkillAutomaticAttachRepairAndDetach(t *testing.T) {
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cli, daemon := filepath.Join(bin, "9a"), filepath.Join(bin, "ninead")
+	cli := filepath.Join(bin, "9a")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	workspace := filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	socket := socketPath(t)
 	token := "managed-skills-admin"
-	env := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "PATH="+bin+":"+os.Getenv("PATH"))
+	env := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "PATH="+bin+":"+os.Getenv("PATH"))
 	var logs bytes.Buffer
-	process := exec.Command(daemon, "--state", filepath.Join(root, "state.db"), "--socket", socket)
+	process := exec.Command(cli, "daemon", "--state", filepath.Join(root, "state.db"), "--socket", socket)
 	process.Env = append(env, "NINEA_BOOTSTRAP_TOKEN="+token)
 	process.Stderr = &logs
 	if err := process.Start(); err != nil {

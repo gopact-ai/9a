@@ -112,16 +112,15 @@ func TestA2ADiscoveryRestoreSyncAsyncCancelAndCLI(t *testing.T) {
 	defer server.Close()
 
 	root := t.TempDir()
-	cli, daemon := filepath.Join(root, "9a"), filepath.Join(root, "ninead")
+	cli := filepath.Join(root, "9a")
 	build(t, cli, "./cmd/9a")
-	build(t, daemon, "./cmd/ninead")
 	socket := socketPath(t)
 	state := filepath.Join(root, "state.db")
 	token := "a2a-admin-secret"
-	adminEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "NINEA_A2A_TOKEN_RESEARCH_AGENT=a2a-e2e-secret")
+	adminEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+token, "NINEA_A2A_TOKEN_RESEARCH_AGENT=a2a-e2e-secret")
 	var logs bytes.Buffer
 	startDaemon := func(bootstrap bool) *exec.Cmd {
-		d := exec.Command(daemon, "--state", state, "--socket", socket)
+		d := exec.Command(cli, "daemon", "--state", state, "--socket", socket)
 		d.Env = adminEnv
 		if bootstrap {
 			d.Env = append(d.Env, "NINEA_BOOTSTRAP_TOKEN="+token)
@@ -137,7 +136,7 @@ func TestA2ADiscoveryRestoreSyncAsyncCancelAndCLI(t *testing.T) {
 	t.Cleanup(func() { _ = d.Process.Kill(); _ = d.Wait() })
 	run(t, adminEnv, cli, "", "providers", "add", "a2a", "research-agent", server.URL)
 	agentToken := strings.TrimSpace(string(run(t, adminEnv, cli, "", "tokens", "create", "agent")))
-	agentEnv := append(os.Environ(), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
+	agentEnv := isolatedEnv(filepath.Join(root, "home"), "NINEA_SOCKET="+socket, "NINEA_TOKEN="+agentToken)
 	run(t, adminEnv, cli, "", "acl", "grant", "agent", "a2a/research-agent/summarize", "read,invoke")
 	search := run(t, agentEnv, cli, "", "search", "summarize", "--format", "json")
 	var results []map[string]any

@@ -7,7 +7,7 @@ No adapter project, SDK, or generated client is required.
 
 ## 🚀 Quick start
 
-Start `ninead` as described in the [User Guide](getting-started.md), then run:
+Run these commands; `9a add` starts the local daemon when needed:
 
 ```sh
 9a validate examples/declarative/open-meteo.yaml
@@ -116,12 +116,12 @@ variables:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `fromEnv` | Empty | Environment variable read by `ninead` at invocation time. |
+| `fromEnv` | Empty | Environment variable read by `9a daemon` at invocation time. |
 | `default` | Empty | Value used when the environment variable is unset or empty. |
 | `required` | `false` | Fail the invocation when neither source provides a value. |
 | `sensitive` | `false` | Declares secret intent for tools and future policy checks. |
 
-Do not put secret values in YAML. Start or restart `ninead` from an environment
+Do not put secret values in YAML. Start or restart `9a daemon` from an environment
 that contains the variables. Templates refer to the logical YAML name, not the
 environment variable name: `{{ vars.api-token }}`.
 
@@ -354,7 +354,7 @@ repair; it is not a security boundary against the same OS account.
 ## 🛠️ Troubleshooting
 
 - **Required environment variable is missing:** place it in the environment
-  used to start `ninead`, then restart the daemon.
+  used to start `9a daemon`, then restart the daemon.
 - **Remote base URL must use HTTPS:** use HTTPS, or a loopback URL for local
   development.
 - **Projection conflict:** move or rename the existing user-owned directory;

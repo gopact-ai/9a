@@ -12,13 +12,13 @@ structured input.
 ## Why executable adapters
 
 An adapter is a separate executable instead of a Go package linked into
-`ninead`. This provides three useful properties:
+`9a daemon`. This provides three useful properties:
 
 - use Python, Go, Rust, JavaScript, or any language that can read and write
   JSON Lines;
 - install or update an integration without rebuilding NineA;
 - isolate protocol libraries and child-process failures from the daemon
-  process. Provider credentials normally remain in the `ninead` environment
+  process. Provider credentials normally remain in the `9a daemon` environment
   and are inherited by the child unless the adapter uses an external secret
   store.
 
@@ -176,7 +176,7 @@ The adapter returns a structured result:
 {"version":"9a.adapter/v1","id":"req-3","result":{"output":{"invoice_id":"inv_456","status":"draft"}}}
 ```
 
-An adapter must not reinterpret NineA authorization. `ninead` decides whether
+An adapter must not reinterpret NineA authorization. `9a daemon` decides whether
 the caller may invoke a Capability; the adapter authenticates only to the
 upstream system.
 
@@ -192,7 +192,7 @@ Build it, configure its manifest and token environment, then register its
 absolute executable path:
 
 ```sh
-# Set these before starting ninead.
+# Set these before starting 9a daemon.
 export NINEA_HTTP_ADAPTER_MANIFEST=/absolute/path/to/manifest.json
 export NINEA_HTTP_TOKEN_BILLING=replace-with-provider-token
 ```

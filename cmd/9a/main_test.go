@@ -1,18 +1,253 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/gopact-ai/9a/internal/api"
 	callmodel "github.com/gopact-ai/9a/internal/call"
 )
+
+func TestLocalPathsForHome(t *testing.T) {
+	t.Parallel()
+	home := filepath.Join(string(filepath.Separator), "home", "alice")
+	dir := filepath.Join(home, ".local", "state", "ninea")
+	got := localPathsForHome(home)
+	want := localPaths{
+		dir:    dir,
+		state:  filepath.Join(dir, "ninea.db"),
+		socket: filepath.Join(dir, "ninea.sock"),
+		token:  filepath.Join(dir, "admin-token"),
+		log:    filepath.Join(dir, "daemon.log"),
+		pid:    filepath.Join(dir, "daemon.pid"),
+		lock:   filepath.Join(dir, "daemon.lock"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("localPathsForHome(%q) = %#v, want %#v", home, got, want)
+	}
+}
+
+func TestDaemonPathsFollowCustomStateAndSocket(t *testing.T) {
+	t.Parallel()
+	base := localPathsForHome(filepath.Join(string(filepath.Separator), "home", "alice"))
+	state := filepath.Join(t.TempDir(), "test.db")
+	socket := filepath.Join(t.TempDir(), "test.sock")
+	got := daemonPaths(base, state, socket)
+	want := localPaths{
+		state:  state,
+		socket: socket,
+		token:  state + ".admin-token",
+		log:    state + ".log",
+		pid:    socket + ".pid",
+		lock:   socket + ".lock",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("daemonPaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestStartupLockHelperProcess(t *testing.T) {
+	if os.Getenv("NINEA_TEST_INHERITED_LOCK_HELPER") == "1" {
+		file := os.NewFile(3, "inherited-daemon-lock")
+		if file == nil {
+			os.Exit(2)
+		}
+		_, _ = fmt.Fprintln(os.Stdout, "locked")
+		time.Sleep(500 * time.Millisecond)
+		_ = file.Close()
+		os.Exit(0)
+	}
+	if os.Getenv("NINEA_TEST_LOCK_HELPER") != "1" {
+		return
+	}
+	file, err := os.OpenFile(os.Getenv("NINEA_TEST_LOCK_PATH"), os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil || syscall.Flock(int(file.Fd()), syscall.LOCK_EX) != nil {
+		os.Exit(2)
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "locked")
+	time.Sleep(30 * time.Second)
+	os.Exit(0)
+}
+
+func TestAcquireStartupLockHasDeadline(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "daemon.lock")
+	helper := exec.Command(os.Args[0], "-test.run=^TestStartupLockHelperProcess$")
+	helper.Env = append(os.Environ(), "NINEA_TEST_LOCK_HELPER=1", "NINEA_TEST_LOCK_PATH="+lock)
+	stdout, err := helper.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper.Stderr = os.Stderr
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = helper.Process.Kill()
+		_ = helper.Wait()
+	})
+	if _, err := bufio.NewReader(stdout).ReadString('\n'); err != nil {
+		t.Fatalf("wait for lock helper: %v", err)
+	}
+	started := time.Now()
+	lockFile, ready, err := acquireStartupLock(lock, filepath.Join(t.TempDir(), "missing.sock"), time.Now().Add(150*time.Millisecond))
+	if lockFile != nil {
+		_ = lockFile.Close()
+	}
+	if err == nil || ready {
+		t.Fatalf("acquireStartupLock() = lock %v, ready %v, error %v", lockFile != nil, ready, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("startup lock ignored deadline: %s", elapsed)
+	}
+}
+
+func TestInheritedStartupLockSurvivesParentClose(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "daemon.lock")
+	socket := filepath.Join(t.TempDir(), "missing.sock")
+	lockFile, ready, err := acquireStartupLock(lock, socket, time.Now().Add(time.Second))
+	if err != nil || ready {
+		t.Fatalf("initial startup lock = ready %v, error %v", ready, err)
+	}
+	helper := exec.Command(os.Args[0], "-test.run=^TestStartupLockHelperProcess$")
+	helper.Env = append(os.Environ(), "NINEA_TEST_INHERITED_LOCK_HELPER=1")
+	helper.ExtraFiles = []*os.File{lockFile}
+	stdout, err := helper.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = helper.Process.Kill()
+		_ = helper.Wait()
+	})
+	if _, err := bufio.NewReader(stdout).ReadString('\n'); err != nil {
+		t.Fatalf("wait for inherited lock helper: %v", err)
+	}
+	if err := lockFile.Close(); err != nil {
+		t.Fatalf("close parent startup lock: %v", err)
+	}
+
+	contender, contenderReady, err := acquireStartupLock(lock, socket, time.Now().Add(150*time.Millisecond))
+	if contender != nil {
+		_ = contender.Close()
+	}
+	if err == nil || contenderReady {
+		t.Fatalf("inherited startup lock was lost: lock %v, ready %v, error %v", contender != nil, contenderReady, err)
+	}
+	if err := helper.Wait(); err != nil {
+		t.Fatalf("inherited lock helper: %v", err)
+	}
+	acquired, acquiredReady, err := acquireStartupLock(lock, socket, time.Now().Add(time.Second))
+	if err != nil || acquiredReady {
+		t.Fatalf("startup lock after helper exit = ready %v, error %v", acquiredReady, err)
+	}
+	_ = acquired.Close()
+}
+
+func TestLoadOrCreateTokenCreatesPrivateTokenAndReusesIt(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "admin-token")
+	first, err := loadOrCreateToken(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(first, "ninea_") || info.Mode().Perm() != 0600 {
+		t.Fatalf("token = %q, mode = %o", first, info.Mode().Perm())
+	}
+	second, err := loadOrCreateToken(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatalf("second token = %q, want %q", second, first)
+	}
+	explicitPath := filepath.Join(t.TempDir(), "admin-token")
+	explicit, err := loadOrCreateToken(explicitPath, "operator-token")
+	if err != nil || explicit != "operator-token" {
+		t.Fatalf("explicit token = %q, error = %v", explicit, err)
+	}
+	data, err := os.ReadFile(explicitPath)
+	if err != nil || strings.TrimSpace(string(data)) != explicit {
+		t.Fatalf("saved explicit token = %q, error = %v", data, err)
+	}
+	if _, err := loadOrCreateToken(filepath.Join(t.TempDir(), "admin-token"), " operator-token "); err == nil {
+		t.Fatal("bootstrap token with surrounding whitespace was accepted")
+	}
+}
+
+func TestDaemonCommandHelpDocumentsFlags(t *testing.T) {
+	t.Parallel()
+	cmd := newRootCommand(&cli{cwd: t.TempDir(), getenv: func(string) string { return "" }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"daemon", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"9a daemon", "--state", "SQLite state file", "--socket", "Unix socket"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("daemon help is missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestShutdownClosesHTTPThenAppThenDatabaseAndJoinsErrors(t *testing.T) {
+	t.Parallel()
+	serverErr := errors.New("server close failed")
+	appErr := errors.New("app close failed")
+	var order []string
+	err := shutdown(
+		context.Background(),
+		func(context.Context) error { order = append(order, "http"); return serverErr },
+		func(context.Context) error { order = append(order, "app"); return appErr },
+		func() error { order = append(order, "db"); return nil },
+	)
+	if !reflect.DeepEqual(order, []string{"http", "app", "db"}) {
+		t.Fatalf("shutdown order = %v", order)
+	}
+	if !errors.Is(err, serverErr) || !errors.Is(err, appErr) {
+		t.Fatalf("shutdown error = %v", err)
+	}
+}
+
+func TestLocalRPCConfigUsesEnvironmentThenLocalDefaults(t *testing.T) {
+	t.Parallel()
+	paths := localPathsForHome(t.TempDir())
+	if err := os.MkdirAll(paths.dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.token, []byte(" local-token \n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket, token, err := localRPCConfig(func(string) string { return "" }, paths)
+	if err != nil || socket != paths.socket || token != "local-token" {
+		t.Fatalf("default config = %q, %q, %v", socket, token, err)
+	}
+	env := map[string]string{"NINEA_SOCKET": "/tmp/operator.sock", "NINEA_TOKEN": "operator-token"}
+	socket, token, err = localRPCConfig(func(key string) string { return env[key] }, paths)
+	if err != nil || socket != env["NINEA_SOCKET"] || token != env["NINEA_TOKEN"] {
+		t.Fatalf("environment config = %q, %q, %v", socket, token, err)
+	}
+}
 
 func TestAdapterAddRequest(t *testing.T) {
 	got := adapterAddRequest("billing", "/opt/ninea/billing-adapter")

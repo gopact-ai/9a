@@ -1,7 +1,7 @@
 # Generic HTTP API adapter
 
 This standard-library Go executable connects JSON HTTP APIs to NineA without
-changing or rebuilding `ninead`. Edit a manifest to describe operations, then
+changing or rebuilding NineA. Edit a manifest to describe operations, then
 register the executable through NineA's language-neutral adapter registry.
 
 The example is intended as a secure, production-oriented starting point rather
@@ -82,7 +82,7 @@ export NINEA_HTTP_ADAPTER_MANIFEST="$HOME/.config/ninea/http-manifest.json"
 export NINEA_HTTP_TOKEN_ORDERS_API='replace-with-provider-token'
 ```
 
-These variables must be present in the `ninead` environment. Exporting them in
+These variables must be present in the `9a daemon` environment. Exporting them in
 a different shell after the daemon is running does not update an existing
 adapter process. Restart the daemon when changing the manifest or its provider
 credentials.

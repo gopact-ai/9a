@@ -10,14 +10,15 @@ in the initial report.
 
 ## Authentication and authorization
 
-- `ninead` listens on a local Unix socket and changes the socket mode to
+- `9a daemon` listens on a local Unix socket and changes the socket mode to
   `0600`. Every request still requires a bearer token; possession of the socket
   path is not authentication.
 - Tokens identify callers. NineA stores SHA-256 token digests, not plaintext
   bearer tokens.
-- The first daemon start imports `NINEA_BOOTSTRAP_TOKEN` as the administrator
-  token only when the token store is empty. Later starts reject a non-empty
-  bootstrap token.
+- The automatic first start generates an administrator token in the private
+  local state directory with mode `0600`. An explicit
+  `NINEA_BOOTSTRAP_TOKEN` overrides generation only when the token store is
+  empty; later starts reject it.
 - Capability access is default-deny. `read` controls search and projection;
   `invoke` independently controls execution. Adapter registration, provider
   registration, token creation, and ACL grants require `admin`.
@@ -32,7 +33,7 @@ system permissions.
 ## Provider and adapter credentials
 
 `NINEA_TOKEN` authenticates a client to NineA. It is not an upstream provider
-credential. `ninead` removes `NINEA_TOKEN` and `NINEA_BOOTSTRAP_TOKEN` from its
+credential. `9a daemon` removes `NINEA_TOKEN` and `NINEA_BOOTSTRAP_TOKEN` from its
 environment after startup, and the MCP and executable adapter launchers also
 strip both variables from child environments.
 

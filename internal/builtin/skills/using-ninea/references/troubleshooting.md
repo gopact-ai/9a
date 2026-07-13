@@ -23,22 +23,23 @@ Do not confuse a software upgrade with a workspace update:
 ```sh
 brew update
 brew upgrade gopact-ai/tap/ninea
-# Restart ninead with the same state database and socket, without the bootstrap
-# token, then:
+brew services restart ninea # only when using the Homebrew service
 9a update --check
 9a update
 9a status --json
 ```
 
-`brew upgrade` replaces the `9a` and `ninead` binaries. `9a update` upgrades the
+`brew upgrade` replaces the single `9a` binary. `9a update` upgrades the
 built-in Skill and reconciles managed views; it does not install software. Get
-the user's approval before changing packages or restarting `ninead`. Preserve
-the state database and back it up when it contains important configuration.
+the user's approval before changing packages or restarting the daemon.
+Preserve the state database and back it up when it contains important
+configuration.
 Use `9a update --all` only when every attached workspace should be reconciled.
 
 Common checks:
 
-- Cannot connect: verify `ninead` and `NINEA_SOCKET`.
+- Daemon startup failed: inspect `$HOME/.local/state/ninea/daemon.log` and any
+  explicit `NINEA_SOCKET` override.
 - Unauthorized: set `NINEA_TOKEN` to an issued identity token.
 - Empty search: grant `read` on the capability.
 - Invocation denied: grant `invoke` separately.
@@ -48,8 +49,8 @@ Common checks:
   directory. If the ownership manifest itself is missing or corrupt, move the
   directory aside before updating so 9A never deletes ambiguous content.
 - Projection conflict: move the user-owned directory. 9A never overwrites it.
-- Missing provider credentials: restart `ninead` from an environment containing
-  them; projected files never contain resolved secrets.
+- Missing provider credentials: restart `9a daemon` from an environment
+  containing them; projected files never contain resolved secrets.
 
 For long-running work:
 
