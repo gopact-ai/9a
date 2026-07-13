@@ -1,0 +1,43 @@
+README.md
+  s_90a636a9ddfd26::t_9669f504d4738f 152-156
+docs/architecture.md
+  s_90a636a9ddfd26::t_e09b3497f60945 98-102
+docs/getting-started.md
+  s_90a636a9ddfd26::t_ae12555d4e41a0 49-54,347,365-366
+docs/zh-CN/README.md
+  s_90a636a9ddfd26::t_6ddd17416a26ef 142-145
+internal/api/server.go
+  s_90a636a9ddfd26::t_298acccabf3dde 106
+internal/app/app.go
+  s_90a636a9ddfd26::t_92db3d396ea903 258-260
+internal/app/local_skills.go
+  s_90a636a9ddfd26::t_82fe0b62cfce4f 1-227
+internal/app/local_skills_test.go
+  s_90a636a9ddfd26::t_ef355b4bd85324 1-134
+internal/app/update_test.go
+  s_90a636a9ddfd26::t_c7905f91df8131 30
+internal/app/workspaces.go
+  s_90a636a9ddfd26::t_252a568a8e237f 12-19,54-64
+internal/builtin/skills/using-ninea/SKILL.md
+  s_90a636a9ddfd26::t_e2f24f744ceecc 12-15
+internal/builtin/skills/using-ninea/references/troubleshooting.md
+  s_90a636a9ddfd26::t_0917ef265d3c29 15-16,45-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7eeb588fc0ecbcc0393d741c5444f70afa8b13e2",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
