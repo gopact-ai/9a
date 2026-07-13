@@ -1,0 +1,25 @@
+cmd/9a/commands.go
+  s_90a636a9ddfd26::t_a181b3f4b7be55 14,151-180,191,199-200,214,219,230,235,237,246,250
+internal/workspace/resolve.go
+  s_90a636a9ddfd26::t_a205b2e261feee 46-54
+internal/workspace/resolve_test.go
+  s_90a636a9ddfd26::t_8df5c97f211ce2 53-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "77dd97da714e4e4a1d36b5d2336234b2c5176638",
+  "prompts": {},
+  "sessions": {
+    "s_90a636a9ddfd26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a5a-6d78-7c12-a355-ff04afe07756",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
