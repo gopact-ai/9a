@@ -5,7 +5,7 @@ agent-ready filesystem interface. Describe one domain in YAML, run `9a add`,
 and NineA creates one Skill containing every declared operation and workflow.
 No adapter project, SDK, or generated client is required.
 
-## Quick start
+## 🚀 Quick start
 
 Start `ninead` as described in the [User Guide](getting-started.md), then run:
 
@@ -30,7 +30,7 @@ publishes through an owned staging directory, updates the Catalog, and keeps
 the source in SQLite so the integration survives daemon restart. `diff`
 reports added, removed, and modified operations or workflows before an update.
 
-## Generated filesystem interface
+## 🗂️ Generated filesystem interface
 
 The weather example produces:
 
@@ -57,7 +57,7 @@ single command with JSON on stdin. The command returns JSON on stdout. API
 credentials remain in the daemon environment; they are not resolved into the
 projected source.
 
-## Document structure
+## 🧩 Document structure
 
 Every document uses the following envelope:
 
@@ -181,7 +181,7 @@ When `body` is present, NineA encodes it as JSON and supplies
 contracts and discovery metadata; this version does not perform full JSON
 Schema validation during invocation.
 
-## Templates
+## 🧬 Templates
 
 Templates can appear in service headers, request query values, request headers,
 request bodies, hook headers, and workflow step inputs.
@@ -198,7 +198,7 @@ larger text is converted to a string, as in
 `Authorization: "Bearer {{ vars.api-token }}"`. Missing values fail before the
 network request is sent.
 
-## Hooks
+## 🪝 Hooks
 
 Hooks execute in declaration order. Each list item must contain exactly one
 action.
@@ -288,7 +288,7 @@ the executable and prefer a separate OS sandbox when it handles untrusted data.
 See [`executable-hook.yaml`](../examples/declarative/executable-hook.yaml) for a
 complete example.
 
-## Workflows
+## 🔄 Workflows
 
 Workflows compose operations from the same Skill without introducing another
 service:
@@ -320,7 +320,7 @@ parallel branches, loops, conditions, retries, or workflow-to-workflow calls.
 Put retry policy at the API gateway or implement a reviewed custom adapter when
 those semantics are essential.
 
-## Lifecycle and update behavior
+## ♻️ Lifecycle and update behavior
 
 | Command | Daemon required | Effect |
 | --- | --- | --- |
@@ -351,7 +351,7 @@ With FUSE, mutation is rejected by the filesystem. The directory fallback uses
 `0444`/`0555` modes, atomic replacement, integrity checks, and `9a update`
 repair; it is not a security boundary against the same OS account.
 
-## Troubleshooting
+## 🛠️ Troubleshooting
 
 - **Required environment variable is missing:** place it in the environment
   used to start `ninead`, then restart the daemon.
