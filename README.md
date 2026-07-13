@@ -150,8 +150,8 @@ From a workspace, the normal agent workflow starts automatically:
 ```
 
 `9a search` combines provider capabilities with user-owned Skills already in
-`.agents/skills`. The automatic attach before each search rescans every Skill
-directory containing `SKILL.md`, so added, changed, and removed files are
+`.agents/skills`. Each search rescans every attached workspace's Skill
+directories containing `SKILL.md`, so added, changed, and removed files are
 reflected in the local Catalog without a separate import command.
 
 Commands use concise human-readable output by default. Add the global `--json`

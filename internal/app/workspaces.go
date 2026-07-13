@@ -9,14 +9,8 @@ import (
 	"github.com/gopact-ai/9a/internal/workspace"
 )
 
-func (a *App) AttachWorkspace(ctx context.Context, identity, root string, policy workspace.BackendPolicy) (projection.Status, error) {
-	status, err := a.projections.Attach(ctx, root, policy)
-	if err != nil {
-		return status, err
-	}
-	a.mutation.Lock()
-	defer a.mutation.Unlock()
-	return status, a.syncLocalSkills(ctx, identity, status)
+func (a *App) AttachWorkspace(ctx context.Context, root string, policy workspace.BackendPolicy) (projection.Status, error) {
+	return a.projections.Attach(ctx, root, policy)
 }
 func (a *App) WorkspaceStatus(ctx context.Context, root string) (projection.Status, error) {
 	status, err := a.projections.Status(ctx, root)

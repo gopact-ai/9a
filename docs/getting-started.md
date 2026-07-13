@@ -47,7 +47,7 @@ Start from a project directory:
 ```
 
 Search includes both provider capabilities and user-owned Skills already under
-`.agents/skills`. Before each search, automatic attach rescans each direct
+`.agents/skills`. Each search rescans every attached workspace and each direct
 child containing `SKILL.md`; adding, changing, or removing any file in that
 Skill synchronizes the local Catalog. NineA-owned projections are skipped
 because their source capabilities are already indexed.

@@ -10,7 +10,7 @@ Use the filesystem for discovery and commands for execution. Treat every
 editing projected files.
 
 `9a search` also indexes user-owned `.agents/skills/<name>/SKILL.md` entries.
-Its automatic attach scans the complete Skill directory before searching, so
+Each search scans complete Skill directories in every attached workspace, so
 local additions, edits, and removals require no import command.
 
 ## Choose the workflow

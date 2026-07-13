@@ -6,13 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gopact-ai/9a/internal/authz"
 	"github.com/gopact-ai/9a/internal/catalog"
 	"github.com/gopact-ai/9a/internal/search"
 	"github.com/gopact-ai/9a/internal/store"
 	"github.com/gopact-ai/9a/internal/workspace"
 )
 
-func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
+func TestSearchIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -25,7 +26,7 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 	}
 	root := t.TempDir()
 	cleanupReadOnlyProjection(t, root)
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
+	if _, err = a.AttachWorkspace(ctx, root, workspace.PolicyDirectory); err != nil {
 		t.Fatal(err)
 	}
 	results, err := a.Search(ctx, "admin", search.Query{Text: "using-ninea"})
@@ -45,15 +46,28 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 		}
 	}
 	writeSkill("current temperature")
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
-		t.Fatal(err)
-	}
 	results, err = a.Search(ctx, "admin", search.Query{Text: "temperature"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 || results[0].Capability.Name != "local-weather" {
 		t.Fatalf("results=%#v", results)
+	}
+	otherRoot := t.TempDir()
+	cleanupReadOnlyProjection(t, otherRoot)
+	otherSkill := filepath.Join(otherRoot, ".agents", "skills", "calendar")
+	if err = os.MkdirAll(otherSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(otherSkill, "SKILL.md"), []byte("---\nname: local-calendar\ndescription: shared calendar\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.AttachWorkspace(ctx, otherRoot, workspace.PolicyDirectory); err != nil {
+		t.Fatal(err)
+	}
+	results, err = a.Search(ctx, "admin", search.Query{Text: "local skill"})
+	if err != nil || len(results) != 2 {
+		t.Fatalf("fused workspace results=%#v err=%v", results, err)
 	}
 
 	revision, err := catalog.New(db).Revision(ctx)
@@ -66,7 +80,7 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(skillRoot, "references", "notes.md"), []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
+	if _, err = a.Search(ctx, "admin", search.Query{Text: "temperature"}); err != nil {
 		t.Fatal(err)
 	}
 	changedRevision, err := catalog.New(db).Revision(ctx)
@@ -76,7 +90,7 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 	if changedRevision <= revision {
 		t.Fatalf("directory change did not refresh catalog: %d -> %d", revision, changedRevision)
 	}
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
+	if _, err = a.Search(ctx, "admin", search.Query{Text: "temperature"}); err != nil {
 		t.Fatal(err)
 	}
 	unchangedRevision, err := catalog.New(db).Revision(ctx)
@@ -88,9 +102,6 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 	}
 
 	writeSkill("humidity monitor")
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
-		t.Fatal(err)
-	}
 	results, err = a.Search(ctx, "admin", search.Query{Text: "humidity"})
 	if err != nil || len(results) != 1 {
 		t.Fatalf("modified skill results=%#v err=%v", results, err)
@@ -106,9 +117,6 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 	if err = os.RemoveAll(skillRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
-		t.Fatal(err)
-	}
 	results, err = a.Search(ctx, "admin", search.Query{Text: "humidity"})
 	if err != nil {
 		t.Fatal(err)
@@ -121,14 +129,28 @@ func TestAttachIndexesLocalSkillsAndTracksDirectoryChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeSkill("detach cleanup")
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
+	results, err = a.Search(ctx, "admin", search.Query{Text: "detach"})
+	if err != nil || len(results) != 1 {
+		t.Fatalf("detach setup results=%#v err=%v", results, err)
+	}
+	detachedID := results[0].Capability.ID
+	if err = a.Grant(ctx, "agent", detachedID, []string{"write"}); err != nil {
 		t.Fatal(err)
 	}
 	if err = a.DetachWorkspace(ctx, root); err != nil {
 		t.Fatal(err)
 	}
+	if !a.az.Allowed(ctx, "agent", detachedID, authz.Write) {
+		t.Fatal("detach removed local Skill ACL")
+	}
 	results, err = a.Search(ctx, "admin", search.Query{Text: "detach"})
 	if err != nil || len(results) != 0 {
 		t.Fatalf("detached Skill remains searchable: %#v err=%v", results, err)
+	}
+}
+
+func TestLocalSkillIDPreservesSlugCollisions(t *testing.T) {
+	if localSkillID("ws-test", "foo-bar") == localSkillID("ws-test", "foo_bar") {
+		t.Fatal("distinct directory names produced the same capability ID")
 	}
 }

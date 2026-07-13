@@ -140,8 +140,8 @@ MCP、A2A 和完整命令参考。
 ```
 
 `9a search` 会同时搜索 Provider 能力和 `.agents/skills` 中已有的用户 Skill。
-每次搜索前的自动 attach 会重新扫描所有包含 `SKILL.md` 的 Skill 目录；目录内任意
-文件的新增、修改或删除都会同步到本地 Catalog，不需要额外执行导入命令。
+每次搜索都会重新扫描所有已 attach workspace 中包含 `SKILL.md` 的 Skill 目录；
+目录内任意文件的新增、修改或删除都会同步到本地 Catalog，不需要额外执行导入命令。
 
 所有命令默认输出简洁的人类可读信息；脚本需要稳定的机器可读结果时，统一加全局
 `--json` 参数。

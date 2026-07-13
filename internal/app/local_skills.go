@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -22,6 +23,23 @@ import (
 
 const localSkillProtocol = "skill"
 const localSkillProviderKind = "workspace-skill"
+
+func (a *App) syncAttachedLocalSkills(ctx context.Context, identity string) error {
+	workspaces, err := a.projections.ListWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range workspaces {
+		status, statusErr := a.projections.Status(ctx, item.Root)
+		if statusErr != nil {
+			return fmt.Errorf("sync local Skills in %s: %w", item.Root, statusErr)
+		}
+		if syncErr := a.syncLocalSkills(ctx, identity, status); syncErr != nil {
+			return fmt.Errorf("sync local Skills in %s: %w", item.Root, syncErr)
+		}
+	}
+	return nil
+}
 
 func (a *App) syncLocalSkills(ctx context.Context, identity string, status projection.Status) error {
 	w := status.Workspace
@@ -109,7 +127,7 @@ func scanLocalSkills(status projection.Status) (provider.Provider, []capability.
 			return p, nil, digestErr
 		}
 		capabilities = append(capabilities, capability.Capability{
-			ID:          capability.StableID(localSkillProtocol, w.ID, entry.Name()),
+			ID:          localSkillID(w.ID, entry.Name()),
 			Kind:        "skill.local",
 			Name:        name,
 			Description: description,
@@ -125,6 +143,15 @@ func scanLocalSkills(status projection.Status) (provider.Provider, []capability.
 		})
 	}
 	return p, capabilities, nil
+}
+
+func localSkillID(workspaceID, name string) string {
+	id := capability.StableID(localSkillProtocol, workspaceID, name)
+	if capability.Slug(name) == name {
+		return id
+	}
+	sum := sha256.Sum256([]byte(name))
+	return id + "-" + hex.EncodeToString(sum[:4])
 }
 
 func localSkillProvider(w workspace.Workspace) provider.Provider {
@@ -148,7 +175,7 @@ func (a *App) removeLocalSkills(ctx context.Context, w workspace.Workspace) erro
 	}
 	for _, item := range items {
 		if item.Source.Protocol == localSkillProtocol && item.Source.Provider == w.ID {
-			return repo.DeleteProvider(ctx, localSkillProvider(w).ID)
+			return repo.DeleteProviderPreservingACL(ctx, localSkillProvider(w).ID)
 		}
 	}
 	return nil

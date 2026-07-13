@@ -27,7 +27,7 @@ func TestUpdateRequiresAdminAndRepairsBuiltInSkill(t *testing.T) {
 	}
 	root := t.TempDir()
 	cleanupReadOnlyProjection(t, root)
-	if _, err = a.AttachWorkspace(ctx, "admin", root, workspace.PolicyDirectory); err != nil {
+	if _, err = a.AttachWorkspace(ctx, root, workspace.PolicyDirectory); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, ".agents", "skills", "using-ninea", "SKILL.md")

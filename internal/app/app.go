@@ -438,6 +438,12 @@ func (a *App) Grant(ctx context.Context, identity, capID string, permissions []s
 	return a.az.GrantAll(ctx, identity, capID, parsed)
 }
 func (a *App) Search(ctx context.Context, identity string, q search.Query) ([]search.Result, error) {
+	a.mutation.Lock()
+	err := a.syncAttachedLocalSkills(ctx, identity)
+	a.mutation.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	return a.search.Search(ctx, identity, q)
 }
 func (a *App) Project(ctx context.Context, identity, id, workspaceRoot, root string) error {
