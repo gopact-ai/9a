@@ -1,0 +1,25 @@
+README.md
+  s_f09124bc519457::t_eb20f3a12965e9 6-17
+docs/INDEX.md
+  s_f09124bc519457::t_9a21460318f431 11
+docs/concepts/integrations-capabilities-workspaces.md
+  s_f09124bc519457::t_cd6271439e9e1c 7-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "144ad2f4fb318492f697b6c5dd81025f7613a474",
+  "prompts": {},
+  "sessions": {
+    "s_f09124bc519457": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f68fa-9d72-7dc2-8147-fb3fb6136ab0",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
