@@ -1,0 +1,23 @@
+.github/workflows/release.yml
+  s_f09124bc519457::t_eff0a17b906d39 41-47,49,56,78,82,86
+scripts/test-release-check.sh
+  s_f09124bc519457::t_14d5c44fcb2df9 74-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ea8d1c0d30be481d8162e57bba756122ead16e0e",
+  "prompts": {},
+  "sessions": {
+    "s_f09124bc519457": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f68fa-9d72-7dc2-8147-fb3fb6136ab0",
+        "model": "unknown"
+      },
+      "human_author": "LPX-E5BD8 <lipengxiang_@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
