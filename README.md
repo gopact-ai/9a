@@ -3,6 +3,19 @@
 NineA is a local capability runtime for AI agents. It turns integrations into
 capabilities that a human or agent can search and run from the current project.
 
+## Why NineA (9A)?
+
+Plan 9 made system resources feel uniform by exposing them through 9P. NineA
+borrows that idea for agent systems: integrations should be mounted into a
+workspace behind a small, regular interface instead of taught to every agent
+one by one.
+
+For agents today, Skills are the filesystem-based first-class instruction
+format. NineA therefore exposes one shared gateway Skill, `using-ninea`, and
+lets the runtime handle capability discovery, contracts, credentials,
+approvals, and execution. The Skill stays stable; the mounted capabilities can
+change with the workspace.
+
 ## Install
 
 ```sh

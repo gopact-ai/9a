@@ -8,6 +8,7 @@ reference material when an integration needs credentials or another protocol.
 - [Connect an HTTP integration](guides/connect-http.md)
 - [Use NineA from an agent](guides/use-from-an-agent.md)
 - [Integration, capability, and workspace](concepts/integrations-capabilities-workspaces.md)
+- [Why called NineA (9A)?](concepts/integrations-capabilities-workspaces.md#why-called-ninea-9a)
 - [Runnable integration examples](../examples/integrations/README.md)
 
 ## Reference
