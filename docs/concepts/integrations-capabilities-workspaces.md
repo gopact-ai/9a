@@ -4,6 +4,20 @@ An **integration** is one external system. A **capability** is one action that
 system exposes. A **workspace** is the project whose agent can discover and run
 those actions.
 
+## Why called NineA (9A)?
+
+NineA is named after the idea of bringing Plan 9's interface discipline to
+agent systems. Plan 9 used 9P to present system resources through a uniform
+interface. NineA applies the same shape at the agent boundary: external systems
+are mounted into a workspace as searchable, runnable capabilities.
+
+The current agent ecosystem already treats filesystem Skills as first-class
+instructions. NineA does not generate one Skill per API operation. It installs
+one shared `using-ninea` gateway Skill and keeps the changing capability list in
+the runtime index. That keeps the agent-facing instruction small while still
+making APIs, MCP servers, and A2A agents available through the same
+`<integration>/<capability>` interface.
+
 An HTTP integration has one editable source of truth:
 
 ```text
