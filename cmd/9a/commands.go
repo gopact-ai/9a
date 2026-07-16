@@ -1,53 +1,55 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
-	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/api"
-	"github.com/gopact-ai/9a/internal/authz"
 	"github.com/gopact-ai/9a/internal/buildinfo"
 	workspacepkg "github.com/gopact-ai/9a/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
 const (
-	workspaceGroup   = "workspace"
-	skillGroup       = "skills"
-	integrationGroup = "integrations"
-	accessGroup      = "access"
-	executionGroup   = "execution"
-	utilityGroup     = "utilities"
+	commandGroup = "commands"
+	utilityGroup = "utilities"
 )
 
 type cli struct {
-	cwd    string
-	call   func(api.Request) (json.RawMessage, error)
-	getenv func(string) string
+	cwd         string
+	call        func(api.Request) (json.RawMessage, error)
+	callContext func(context.Context, api.Request) (json.RawMessage, error)
 }
 
 func newCLI(cwd string) *cli {
-	return &cli{cwd: cwd, call: callRPC, getenv: os.Getenv}
+	return &cli{cwd: cwd, callContext: callRPCContext}
+}
+
+func (c *cli) invoke(ctx context.Context, request api.Request) (json.RawMessage, error) {
+	if c.callContext != nil {
+		return c.callContext(ctx, request)
+	}
+	if c.call == nil {
+		return nil, errors.New("local runtime client is unavailable")
+	}
+	return c.call(request)
 }
 
 func newRootCommand(c *cli) *cobra.Command {
 	var showVersion bool
 	root := &cobra.Command{
 		Use:   "9a",
-		Short: "Expose external capabilities as local, agent-ready Skills",
-		Long: `9a manages workspaces, declarative Skills, providers, permissions, and
-capability invocations through a local daemon that starts automatically.
+		Short: "Connect integrations and run their capabilities",
+		Long: `9a turns an integration manifest into capabilities that humans and agents can
+search and run from the current workspace.
 
-Run "9a <command> --help" to see every positional argument, flag, and example
-for a command. Help, completion, version, and validation do not start it.`,
-		Example: `  9a attach
+Run "9a <command> --help" for command-specific examples and flags.`,
+		Example: `  9a connect weather.yaml
   9a search "weather forecast"
-  printf '%s\n' '{"city":"Shanghai"}' | 9a invoke mcp/weather/forecast`,
+  9a run weather/current --input '{"city":"Shanghai"}'`,
 		SilenceErrors:              true,
 		SilenceUsage:               true,
 		DisableAutoGenTag:          true,
@@ -62,48 +64,30 @@ for a command. Help, completion, version, and validation do not start it.`,
 	root.Flags().BoolVar(&showVersion, "version", false, "Print the 9a version")
 	root.PersistentFlags().Bool("json", false, "Print machine-readable JSON instead of human-readable output")
 	root.AddGroup(
-		&cobra.Group{ID: workspaceGroup, Title: "Workspace Commands:"},
-		&cobra.Group{ID: skillGroup, Title: "Skill Commands:"},
-		&cobra.Group{ID: integrationGroup, Title: "Integration Commands:"},
-		&cobra.Group{ID: accessGroup, Title: "Access Commands:"},
-		&cobra.Group{ID: executionGroup, Title: "Execution Commands:"},
-		&cobra.Group{ID: utilityGroup, Title: "Utility Commands:"},
+		&cobra.Group{ID: commandGroup, Title: "Commands:"},
+		&cobra.Group{ID: utilityGroup, Title: "Utilities:"},
 	)
 	root.SetHelpCommandGroupID(utilityGroup)
-	root.SetCompletionCommandGroupID(utilityGroup)
+
+	completion := newCompletionCommand()
+	completion.Hidden = true
+	version := newVersionCommand()
+	version.Hidden = true
 	paths, _ := defaultLocalPaths()
+	daemon := newDaemonCommand(paths)
+	daemon.Hidden = true
+
 	root.AddCommand(
-		c.newAttachCommand(),
-		c.newStatusCommand(),
-		c.newUpdateCommand(),
-		c.newDetachCommand(),
-		c.newValidateCommand(),
-		c.newDeclarativeFileCommand(
-			"add",
-			"Add or replace a declarative Skill",
-			"Validate a declarative Skill source, persist it, and reconcile its managed Skill in the current workspace.",
-			"  9a add examples/declarative/open-meteo.yaml",
-			true,
-		),
-		c.newDeclarativeFileCommand(
-			"diff",
-			"Preview declarative Skill changes",
-			"Compare a declarative Skill source with the persisted version without changing daemon state.",
-			"  9a diff examples/declarative/open-meteo.yaml",
-			false,
-		),
-		c.newRemoveCommand(),
-		c.newAdaptersCommand(),
-		c.newProvidersCommand(),
-		c.newACLCommand(),
-		c.newTokensCommand(),
+		c.newConnectCommand(),
 		c.newSearchCommand(),
-		c.newProjectCommand(),
-		c.newInvokeCommand(),
-		c.newCallsCommand(),
-		newCompletionCommand(),
-		newVersionCommand(),
-		newDaemonCommand(paths),
+		c.newRunCommand(),
+		c.newStatusCommand(),
+		c.newDisconnectCommand(),
+		c.newDoctorCommand(),
+		c.newSecretCommand(),
+		completion,
+		version,
+		daemon,
 	)
 	return root
 }
@@ -120,343 +104,121 @@ func exactArgs(synopsis string, count int) cobra.PositionalArgs {
 	}
 }
 
-func helpOnly(cmd *cobra.Command, _ []string) error {
-	return cmd.Help()
-}
-
-func (c *cli) runRequest(cmd *cobra.Command, request api.Request, plainString bool, autoAttachRoot string) error {
-	if autoAttachRoot != "" && c.getenv("NINEA_AUTO_ATTACH") != "0" {
-		if _, err := c.call(api.Request{Action: "workspace.attach", Root: autoAttachRoot, Backend: "auto"}); err != nil {
-			return fmt.Errorf("auto-attach workspace %q: %w", autoAttachRoot, err)
-		}
-	}
-	data, err := c.call(request)
+func (c *cli) runRequest(cmd *cobra.Command, request api.Request) error {
+	data, err := c.invoke(cmd.Context(), request)
 	if err != nil {
 		var remote *rpcError
-		if errors.As(err, &remote) && len(remote.data) > 0 && string(remote.data) != "null" {
-			data = remote.data
-			remote.data = nil
-			if outputErr := writeCommandOutput(cmd, request, data, plainString); outputErr != nil {
-				return errors.Join(err, outputErr)
+		if errors.As(err, &remote) {
+			if wantsJSON(cmd) {
+				if outputErr := writeMachineError(cmd, remote); outputErr != nil {
+					return errors.Join(err, outputErr)
+				}
+				remote.machineWritten = true
+				remote.data = nil
+			} else if len(remote.data) > 0 && string(remote.data) != "null" {
+				data = remote.data
+				if outputErr := writeRemoteErrorData(cmd, request, data); outputErr != nil {
+					return errors.Join(err, outputErr)
+				}
+				remote.data = nil
 			}
 		}
 		return err
 	}
-	return writeCommandOutput(cmd, request, data, plainString)
+	return writeCommandOutput(cmd, request, data)
 }
 
-func (c *cli) runRequestInCurrentWorkspace(cmd *cobra.Command, request api.Request, plainString bool) error {
-	root, err := workspacepkg.Resolve("", c.cwd)
-	if err != nil {
-		return err
-	}
-	return c.runRequest(cmd, request, plainString, root)
-}
-
-func (c *cli) newAttachCommand() *cobra.Command {
-	var workspace, backend string
-	cmd := &cobra.Command{
-		Use:     "attach",
-		Short:   "Attach a workspace",
-		GroupID: workspaceGroup,
-		Long: `Attach the selected workspace and create NineA-managed Skill views.
-
-The workspace defaults to the nearest project root from the current directory.
-When run inside .agents/skills or .claude/skills, it selects the owning
-workspace. The auto backend prefers FUSE and falls back to a directory view.`,
-		Example: `  9a attach
-  9a attach --workspace /work/project --backend directory`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			switch backend {
-			case "auto", "fuse", "directory":
-			default:
-				return fmt.Errorf("invalid --backend %q: expected auto, fuse, or directory", backend)
-			}
-			request, err := workspaceCommandRequest("attach", workspace, backend, c.cwd, false, false)
-			if err != nil {
-				return err
-			}
-			return c.runRequest(cmd, request, false, "")
-		},
-	}
-	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
-	cmd.Flags().StringVar(&backend, "backend", "auto", "Projection backend: auto, fuse, or directory")
-	_ = cmd.MarkFlagDirname("workspace")
-	_ = cmd.RegisterFlagCompletionFunc("backend", cobra.FixedCompletions(
-		[]cobra.Completion{"auto", "fuse", "directory"},
-		cobra.ShellCompDirectiveNoFileComp,
-	))
-	return cmd
-}
-
-func (c *cli) newStatusCommand() *cobra.Command {
-	var workspace string
-	cmd := &cobra.Command{
-		Use:     "status",
-		Short:   "Show workspace status",
-		GroupID: workspaceGroup,
-		Long: `Show the selected workspace's backend and managed Skills.
-
-The default is a short human-readable summary. Use --json for full details.`,
-		Example: `  9a status
-  9a status --workspace /work/project --json`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			request, err := workspaceCommandRequest("status", workspace, "auto", c.cwd, false, false)
-			if err != nil {
-				return err
-			}
-			return c.runRequest(cmd, request, false, "")
-		},
-	}
-	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
-	_ = cmd.MarkFlagDirname("workspace")
-	return cmd
-}
-
-func (c *cli) newUpdateCommand() *cobra.Command {
-	var workspace string
-	var check, all bool
-	cmd := &cobra.Command{
-		Use:     "update",
-		Short:   "Update managed Skills",
-		GroupID: workspaceGroup,
-		Long: `Rediscover providers and reconcile managed Skills in the selected workspace.
-
-Use --check for a read-only preview. Use --all to reconcile every attached
-workspace instead of only the selected workspace. The two flags are mutually
-exclusive.`,
-		Example: `  9a update --check
-  9a update
-  9a update --all`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			request, err := workspaceCommandRequest("update", workspace, "auto", c.cwd, check, all)
-			if err != nil {
-				return err
-			}
-			autoAttachRoot := ""
-			if !check && !all {
-				autoAttachRoot = request.Root
-			}
-			return c.runRequest(cmd, request, false, autoAttachRoot)
-		},
-	}
-	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
-	cmd.Flags().BoolVar(&check, "check", false, "Preview changes without modifying the workspace")
-	cmd.Flags().BoolVar(&all, "all", false, "Update every attached workspace")
-	cmd.MarkFlagsMutuallyExclusive("check", "all")
-	_ = cmd.MarkFlagDirname("workspace")
-	return cmd
-}
-
-func (c *cli) newDetachCommand() *cobra.Command {
-	var workspace string
-	cmd := &cobra.Command{
-		Use:     "detach",
-		Short:   "Detach a workspace",
-		GroupID: workspaceGroup,
-		Long:    "Remove only NineA-managed views from the selected workspace. Persisted sources and providers are not deleted.",
-		Example: `  9a detach
-  9a detach --workspace /work/project`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			request, err := workspaceCommandRequest("detach", workspace, "auto", c.cwd, false, false)
-			if err != nil {
-				return err
-			}
-			return c.runRequest(cmd, request, false, "")
-		},
-	}
-	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
-	_ = cmd.MarkFlagDirname("workspace")
-	return cmd
-}
-
-func (c *cli) newValidateCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "validate <source.yaml>",
-		Short:   "Validate a declarative Skill file",
-		GroupID: skillGroup,
-		Long: `Strictly parse a declarative Skill source and print its name, digest, and
-capability IDs. This command does not contact the daemon or change state.`,
-		Example: "  9a validate examples/declarative/open-meteo.yaml",
-		Args:    exactArgs("<source.yaml>", 1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := validateDeclarativeFile(args[0])
-			if err != nil {
-				return err
-			}
-			return writeValidationOutput(cmd, result)
-		},
-	}
-}
-
-func (c *cli) newDeclarativeFileCommand(name, short, long, example string, autoAttach bool) *cobra.Command {
-	return &cobra.Command{
-		Use:     name + " <source.yaml>",
-		Short:   short,
-		GroupID: skillGroup,
-		Long:    long,
-		Example: example,
-		Args:    exactArgs("<source.yaml>", 1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			request, err := declarativeFileRequest(name, args[0], c.cwd)
-			if err != nil {
-				return err
-			}
-			if autoAttach {
-				return c.runRequestInCurrentWorkspace(cmd, request, false)
-			}
-			return c.runRequest(cmd, request, false, "")
-		},
-	}
-}
-
-func (c *cli) newRemoveCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "remove <skill-name>",
-		Short:   "Remove a declarative Skill",
-		GroupID: skillGroup,
-		Long:    "Remove a persisted declarative source and only the managed Skill owned by that source.",
-		Example: "  9a remove weather",
-		Args:    exactArgs("<skill-name>", 1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			request := declarativeRemoveRequest(args[0])
-			return c.runRequest(cmd, request, false, "")
-		},
-	}
-}
-
-func (c *cli) newAdaptersCommand() *cobra.Command {
-	parent := &cobra.Command{
-		Use:     "adapters",
-		Short:   "Manage executable adapters",
-		GroupID: integrationGroup,
-		Long:    "Register reviewed executables that implement the language-neutral 9a.adapter/v1 protocol.",
-		RunE:    helpOnly,
-	}
-	parent.AddCommand(&cobra.Command{
-		Use:     "add <protocol> <absolute-executable>",
-		Short:   "Register an executable adapter",
-		Long:    "Register an absolute executable path for a protocol, then make it available to provider discovery.",
-		Example: "  9a adapters add billing /opt/ninea/billing-adapter",
-		Args:    exactArgs("<protocol> <absolute-executable>", 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			canonical, err := adapterreg.ValidateRegistration(args[0], args[1])
-			if err != nil {
-				return fmt.Errorf("invalid adapter %q: %w", args[1], err)
-			}
-			request := adapterAddRequest(args[0], canonical)
-			return c.runRequestInCurrentWorkspace(cmd, request, false)
-		},
-	})
-	return parent
-}
-
-func (c *cli) newProvidersCommand() *cobra.Command {
-	parent := &cobra.Command{
-		Use:     "providers",
-		Short:   "Manage capability providers",
-		GroupID: integrationGroup,
-		Long:    "Discover, persist, or remove providers for MCP, A2A, and registered executable adapter protocols.",
-		RunE:    helpOnly,
-	}
-	parent.AddCommand(
-		&cobra.Command{
-			Use:   "add <protocol> <name> <endpoint>",
-			Short: "Discover and add a provider",
-			Long:  "Discover capabilities from an endpoint and persist the provider under its protocol and name.",
-			Example: `  9a providers add mcp weather "stdio:/opt/bin/weather-server"
-  9a providers add a2a research https://agent.example.com`,
-			Args: exactArgs("<protocol> <name> <endpoint>", 3),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				request := api.Request{Action: "provider.add", Protocol: args[0], Name: args[1], Endpoint: args[2]}
-				return c.runRequestInCurrentWorkspace(cmd, request, false)
-			},
-		},
-		&cobra.Command{
-			Use:     "remove <protocol> <name>",
-			Short:   "Remove a provider",
-			Long:    "Remove a provider and the managed views generated from its capabilities.",
-			Example: "  9a providers remove mcp weather",
-			Args:    exactArgs("<protocol> <name>", 2),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				request := api.Request{Action: "provider.remove", Protocol: args[0], Name: args[1]}
-				return c.runRequest(cmd, request, false, "")
-			},
-		},
-	)
-	return parent
-}
-
-func (c *cli) newACLCommand() *cobra.Command {
-	parent := &cobra.Command{
-		Use:     "acl",
-		Short:   "Manage capability permissions",
-		GroupID: accessGroup,
-		RunE:    helpOnly,
-	}
-	parent.AddCommand(&cobra.Command{
-		Use:   "grant <identity> <capability> <permissions>",
-		Short: "Grant capability permissions",
-		Long: `Grant one or more comma-separated permissions to an identity for one capability.
-
-Supported permissions are read, invoke, write, and admin.`,
-		Example: "  9a acl grant support-agent api/orders/get-order read,invoke",
-		Args:    exactArgs("<identity> <capability> <permissions>", 3),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(args[0]) == "" {
-				return fmt.Errorf("<identity> must be non-empty")
-			}
-			if strings.TrimSpace(args[1]) == "" {
-				return fmt.Errorf("<capability> must be non-empty")
-			}
-			permissions := strings.Split(args[2], ",")
-			for i := range permissions {
-				permissions[i] = strings.TrimSpace(permissions[i])
-				permission, err := authz.ParsePermission(permissions[i])
-				if err != nil {
-					return err
+func (c *cli) newConnectCommand() *cobra.Command {
+	var guide string
+	command := &cobra.Command{
+		Use:     "connect [manifest.yaml]",
+		Short:   "Connect an integration",
+		GroupID: commandGroup,
+		Long:    "Validate an integration manifest and connect it to the current workspace. Running this again updates the integration. With no arguments, show the first-connect routes without starting the runtime.",
+		Example: `  9a connect weather.yaml
+	  9a connect --guide http --json
+  9a connect mcp --name local-tools -- /absolute/mcp-server
+  9a connect a2a --name research-agent https://agent.example.com`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if guide != "" {
+				if len(args) != 0 {
+					return fmt.Errorf("%s --guide cannot be combined with a manifest", cmd.CommandPath())
 				}
-				permissions[i] = string(permission)
+				return nil
 			}
-			request := api.Request{Action: "acl.grant", Identity: args[0], Capability: args[1], Permissions: permissions}
-			return c.runRequest(cmd, request, false, "")
+			if len(args) > 1 {
+				return fmt.Errorf("%s accepts at most one manifest: <manifest.yaml>", cmd.CommandPath())
+			}
+			return nil
 		},
-	})
-	return parent
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if guide != "" {
+				return writeConnectGuide(cmd, guide)
+			}
+			if len(args) == 0 {
+				return writeConnectRoutes(cmd)
+			}
+			request, err := connectRequest(args[0], c.cwd)
+			if err != nil {
+				return err
+			}
+			return c.runRequest(cmd, request)
+		},
+	}
+	command.Flags().StringVar(&guide, "guide", "", "Print the embedded authoring contract for http, mcp, or a2a")
+	command.AddCommand(c.newMCPConnectCommand(), c.newA2AConnectCommand())
+	return command
 }
 
-func (c *cli) newTokensCommand() *cobra.Command {
-	parent := &cobra.Command{
-		Use:     "tokens",
-		Short:   "Manage identity tokens",
-		GroupID: accessGroup,
-		RunE:    helpOnly,
-	}
-	parent.AddCommand(&cobra.Command{
-		Use:     "create <identity>",
-		Short:   "Create an identity token",
-		Long:    "Create a bearer token for an identity and print only the token to stdout.",
-		Example: `  export NINEA_TOKEN="$(9a tokens create support-agent)"`,
-		Args:    exactArgs("<identity>", 1),
+func (c *cli) newMCPConnectCommand() *cobra.Command {
+	var name string
+	command := &cobra.Command{
+		Use:     "mcp <absolute-executable>",
+		Short:   "Connect a local MCP server",
+		Long:    "Connect one local MCP server executable with no arguments.",
+		Example: `  9a connect mcp --name <slug> -- /absolute/executable`,
+		Args:    exactArgs("<absolute-executable>", 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.runRequest(cmd, api.Request{Action: "token.create", Identity: args[0]}, true, "")
+			request, err := protocolConnectRequest("mcp", name, args[0], c.cwd)
+			if err != nil {
+				return err
+			}
+			return c.runRequest(cmd, request)
 		},
-	})
-	return parent
+	}
+	command.Flags().StringVar(&name, "name", "", "Canonical integration slug")
+	_ = command.MarkFlagRequired("name")
+	return command
+}
+
+func (c *cli) newA2AConnectCommand() *cobra.Command {
+	var name string
+	command := &cobra.Command{
+		Use:     "a2a <url>",
+		Short:   "Connect a remote A2A agent",
+		Long:    "Connect an A2A agent over HTTPS. Loopback HTTP is accepted for local development.",
+		Example: `  9a connect a2a --name <slug> <url>`,
+		Args:    exactArgs("<url>", 1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			request, err := protocolConnectRequest("a2a", name, args[0], c.cwd)
+			if err != nil {
+				return err
+			}
+			return c.runRequest(cmd, request)
+		},
+	}
+	command.Flags().StringVar(&name, "name", "", "Canonical integration slug")
+	_ = command.MarkFlagRequired("name")
+	return command
 }
 
 func (c *cli) newSearchCommand() *cobra.Command {
-	var legacyFormat string
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:     "search <query...>",
-		Short:   "Search visible capabilities",
-		GroupID: executionGroup,
-		Long:    "Search capabilities visible to the current identity and print concise matching Catalog entries.",
-		Example: `  9a search "weather temperature"
+		Short:   "Find capabilities",
+		GroupID: commandGroup,
+		Long:    "Search capabilities available in the current workspace.",
+		Example: `  9a search "weather forecast"
   9a search weather temperature --json`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -465,173 +227,191 @@ func (c *cli) newSearchCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if legacyFormat != "" && legacyFormat != "json" {
-				return fmt.Errorf("unsupported --format %q: expected json", legacyFormat)
-			}
-			if legacyFormat == "json" {
-				if err := cmd.Root().PersistentFlags().Set("json", "true"); err != nil {
-					return err
-				}
-			}
-			request := api.Request{Action: "search", Query: strings.Join(args, " "), Format: legacyFormat}
-			return c.runRequestInCurrentWorkspace(cmd, request, false)
-		},
-	}
-	// Keep the old machine-output spelling working without advertising a
-	// second public format flag or contaminating JSON stdout with a warning.
-	cmd.Flags().StringVar(&legacyFormat, "format", "", "Deprecated output format")
-	_ = cmd.Flags().MarkHidden("format")
-	return cmd
-}
-
-func (c *cli) newProjectCommand() *cobra.Command {
-	parent := &cobra.Command{
-		Use:     "project",
-		Short:   "Project capabilities as filesystem Skills",
-		GroupID: executionGroup,
-		RunE:    helpOnly,
-	}
-	parent.AddCommand(&cobra.Command{
-		Use:     "add <capability> <skills-root>",
-		Short:   "Project one capability into a Skills directory",
-		Long:    "Materialize one visible capability as a managed filesystem Skill under the selected Skills root.",
-		Example: "  9a project add mcp/weather/get-weather .agents/skills",
-		Args:    exactArgs("<capability> <skills-root>", 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			root, err := filepath.Abs(args[1])
+			root, err := workspacepkg.Resolve("", c.cwd)
 			if err != nil {
 				return err
 			}
-			workspaceRoot, err := workspacepkg.Resolve("", c.cwd)
-			if err != nil {
-				return err
-			}
-			if c.getenv("NINEA_AUTO_ATTACH") == "0" {
-				workspaceRoot = workspaceForProjectionRoot(root)
-			}
-			request := api.Request{Action: "project.add", Capability: args[0], Workspace: workspaceRoot, Root: root}
-			return c.runRequest(cmd, request, false, workspaceRoot)
-		},
-	})
-	return parent
-}
-
-func (c *cli) newInvokeCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "invoke <capability>",
-		Short:   "Invoke a capability synchronously",
-		GroupID: executionGroup,
-		Long: `Read JSON from stdin, invoke a capability, and print a readable result.
-
-Empty stdin is treated as {}. The CLI waits up to 30 seconds; use "9a calls
-start" for work that must continue after the client exits. Use --json for the
-raw result.`,
-		Example: `  printf '%s\n' '{"city":"Shanghai"}' | 9a invoke mcp/weather/forecast`,
-		Args:    exactArgs("<capability>", 1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			request, err := invokeRequest(args[0], cmd.InOrStdin())
-			if err != nil {
-				return err
-			}
-			return c.runRequest(cmd, request, false, "")
+			request := api.Request{Action: "search", Query: strings.Join(args, " "), Root: root}
+			return c.runRequest(cmd, request)
 		},
 	}
 }
 
-func (c *cli) newCallsCommand() *cobra.Command {
-	parent := &cobra.Command{
-		Use:     "calls",
-		Short:   "Manage asynchronous calls",
-		GroupID: executionGroup,
-		Long:    "Start long-running capability calls, inspect persistent state and events, or request cancellation.",
-		RunE:    helpOnly,
-	}
-	parent.AddCommand(
-		c.newCallsStartCommand(),
-		c.newCallsGetCommand(),
-		c.newCallsEventsCommand(),
-		c.newCallsCancelCommand(),
-	)
-	return parent
-}
-
-func (c *cli) newCallsStartCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "start <capability>",
-		Short:   "Start an asynchronous call",
-		Long:    "Read JSON from stdin, persist the call, and print only its call ID to stdout.",
-		Example: `  CALL_ID="$(printf '%s\n' '{"city":"Shanghai"}' | 9a calls start mcp/weather/forecast)"`,
-		Args:    exactArgs("<capability>", 1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			request, plain, err := callsRequest("start", args[0], cmd.InOrStdin(), 0, 0)
-			if err != nil {
-				return err
-			}
-			return c.runRequest(cmd, request, plain, "")
-		},
-	}
-}
-
-func (c *cli) newCallsGetCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "get <call-id>",
-		Short:   "Get asynchronous call state",
-		Long:    "Print a readable persistent state and terminal result for one call.",
-		Example: "  9a calls get call_01HXYZ",
-		Args:    exactArgs("<call-id>", 1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			request, plain, err := callsRequest("get", args[0], cmd.InOrStdin(), 0, 0)
-			if err != nil {
-				return err
-			}
-			return c.runRequest(cmd, request, plain, "")
-		},
-	}
-}
-
-func (c *cli) newCallsEventsCommand() *cobra.Command {
-	var after, limit int
+func (c *cli) newRunCommand() *cobra.Command {
+	var input string
+	var approval string
 	cmd := &cobra.Command{
-		Use:   "events <call-id>",
-		Short: "List asynchronous call events",
-		Long: `Print one readable persistent event page. --after is an exclusive sequence
-cursor; --limit bounds the number of returned events. Use --json for the raw page.`,
-		Example: "  9a calls events call_01HXYZ --after 100 --limit 25",
-		Args:    exactArgs("<call-id>", 1),
+		Use:     "run <integration>/<capability>",
+		Short:   "Run a capability",
+		GroupID: commandGroup,
+		Long: `Run a capability with one JSON input source: --input, --input @file, or
+stdin. Use --input - to read stdin explicitly. Empty input is treated as {}.`,
+		Example: `  9a run weather/current
+  9a run weather/current --input '{"city":"Shanghai"}'
+  9a run weather/current --input @request.json
+  printf '%s\n' '{"city":"Shanghai"}' | 9a run weather/current`,
+		Args: exactArgs("<integration>/<capability>", 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if after < 0 {
-				return fmt.Errorf("--after must be zero or greater")
-			}
-			if cmd.Flags().Changed("limit") && limit <= 0 {
-				return fmt.Errorf("--limit must be greater than zero")
-			}
-			request, plain, err := callsRequest("events", args[0], cmd.InOrStdin(), after, limit)
+			request, err := capabilityRunRequest(args[0], input, cmd.InOrStdin())
 			if err != nil {
 				return err
 			}
-			return c.runRequest(cmd, request, plain, "")
+			root, err := workspacepkg.Resolve("", c.cwd)
+			if err != nil {
+				return err
+			}
+			request.Root = root
+			request.Approval = approval
+			return c.runRequest(cmd, request)
 		},
 	}
-	cmd.Flags().IntVar(&after, "after", 0, "Return events after this sequence number (minimum 0)")
-	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum events to return (server default when omitted)")
+	cmd.Flags().StringVar(&input, "input", "", "JSON input, @path to a JSON file, or - for stdin")
+	cmd.Flags().StringVar(&approval, "approve", "", "Approval token returned by approval_required")
 	return cmd
 }
 
-func (c *cli) newCallsCancelCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "cancel <call-id>",
-		Short:   "Cancel an active asynchronous call",
-		Long:    "Request cancellation of an active call and wait for adapter confirmation.",
-		Example: "  9a calls cancel call_01HXYZ",
-		Args:    exactArgs("<call-id>", 1),
+func (c *cli) newStatusCommand() *cobra.Command {
+	var workspace string
+	cmd := &cobra.Command{
+		Use:     "status [integration]",
+		Short:   "Show readiness",
+		GroupID: commandGroup,
+		Long:    "Show whether the selected workspace is ready.",
+		Example: `  9a status
+  9a status weather
+  9a status --workspace /work/project --json`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			request, plain, err := callsRequest("cancel", args[0], cmd.InOrStdin(), 0, 0)
+			integration := ""
+			if len(args) == 1 {
+				integration = args[0]
+			}
+			request, err := statusRequest(workspace, c.cwd, integration)
 			if err != nil {
 				return err
 			}
-			return c.runRequest(cmd, request, plain, "")
+			return c.runRequest(cmd, request)
 		},
 	}
+	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
+	_ = cmd.MarkFlagDirname("workspace")
+	return cmd
+}
+
+func (c *cli) newDisconnectCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:     "disconnect <integration>",
+		Short:   "Disconnect an integration",
+		GroupID: commandGroup,
+		Long:    "Disconnect an integration while preserving its manifest in the workspace.",
+		Example: "  9a disconnect weather",
+		Args:    exactArgs("<integration>", 1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			request, err := disconnectRequest(args[0], c.cwd)
+			if err != nil {
+				return err
+			}
+			return c.runRequest(cmd, request)
+		},
+	}
+}
+
+func (c *cli) newDoctorCommand() *cobra.Command {
+	var workspace string
+	var fix bool
+	cmd := &cobra.Command{
+		Use:     "doctor",
+		Short:   "Diagnose local problems",
+		GroupID: commandGroup,
+		Long:    "Check the current workspace without changing it. --fix repairs the gateway and reconnects stale sources; reconnecting may start a local MCP executable or contact an A2A endpoint.",
+		Example: `  9a doctor
+  9a doctor --fix`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			request, err := doctorRequest(workspace, c.cwd, fix)
+			if err != nil {
+				return err
+			}
+			return c.runRequest(cmd, request)
+		},
+	}
+	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: discover from current directory)")
+	cmd.Flags().BoolVar(&fix, "fix", false, "Repair the gateway and reconnect stale integrations")
+	_ = cmd.MarkFlagDirname("workspace")
+	return cmd
+}
+
+func (c *cli) newSecretCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:     "secret",
+		Short:   "Manage integration secrets",
+		GroupID: commandGroup,
+		Long:    "Store secret values in the operating system credential store. Values are never accepted as command arguments.",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	set := &cobra.Command{
+		Use:     "set <integration>.<key>",
+		Short:   "Store a secret from hidden input or stdin",
+		Example: "  9a secret set weather.api-token\n  printf '%s' \"$TOKEN\" | 9a secret set weather.api-token",
+		Args:    exactArgs("<integration>.<key>", 1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			request, err := secretSetRequest(args[0], cmd.InOrStdin(), cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			root, err := workspacepkg.Resolve("", c.cwd)
+			if err != nil {
+				return err
+			}
+			request.Root = root
+			return c.runRequest(cmd, request)
+		},
+	}
+	list := &cobra.Command{
+		Use:     "list [integration]",
+		Short:   "List secret names and presence",
+		Example: "  9a secret list\n  9a secret list weather",
+		Args:    cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			integration := ""
+			if len(args) == 1 {
+				integration = args[0]
+			}
+			request, err := secretListRequest(integration)
+			if err != nil {
+				return err
+			}
+			root, err := workspacepkg.Resolve("", c.cwd)
+			if err != nil {
+				return err
+			}
+			request.Root = root
+			return c.runRequest(cmd, request)
+		},
+	}
+	unset := &cobra.Command{
+		Use:     "unset <integration>.<key>",
+		Short:   "Remove a secret",
+		Example: "  9a secret unset weather.api-token",
+		Args:    exactArgs("<integration>.<key>", 1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			request, err := secretUnsetRequest(args[0])
+			if err != nil {
+				return err
+			}
+			root, err := workspacepkg.Resolve("", c.cwd)
+			if err != nil {
+				return err
+			}
+			request.Root = root
+			return c.runRequest(cmd, request)
+		},
+	}
+	command.AddCommand(set, list, unset)
+	return command
 }
 
 func newCompletionCommand() *cobra.Command {

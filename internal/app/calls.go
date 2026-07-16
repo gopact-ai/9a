@@ -5,35 +5,32 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/gopact-ai/9a/internal/authz"
 	"github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/capability"
+	"github.com/gopact-ai/9a/internal/jsoncontract"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/secret"
 )
 
 var (
-	ErrCallNotFound      = errors.New("call not found")
-	ErrCallNotCancelable = errors.New("call is not cancelable")
-	ErrCallNotActive     = errors.New("call is not active")
-	ErrCallPersistence   = errors.New("call terminal state persistence failed")
-	ErrCallCancelFailed  = errors.New("adapter cancellation failed")
+	ErrCallNotFound    = errors.New("call not found")
+	ErrCallPersistence = errors.New("call terminal state persistence failed")
 )
 
 const maxRuntimeCallErrors = 1_024
 
 type callRuntime struct {
-	id          string
-	owner       string
-	capability  capability.Capability
-	provider    provider.Provider
-	adapter     provider.Adapter
-	lease       *operationLease
-	ready       chan struct{}
-	readyOnce   sync.Once
-	done        chan struct{}
-	terminalErr error
+	id         string
+	capability capability.Capability
+	provider   provider.Provider
+	adapter    provider.Adapter
+	lease      *operationLease
+	gate       *sync.RWMutex
+	done       chan struct{}
 }
 
 type persistentCallSink struct {
@@ -44,7 +41,6 @@ type persistentCallSink struct {
 }
 
 func (s *persistentCallSink) Started() error {
-	s.runtime.readyOnce.Do(func() { close(s.runtime.ready) })
 	return nil
 }
 
@@ -77,7 +73,13 @@ func (s *persistentCallSink) Artifact(name, mediaType string, data []byte) error
 	return err
 }
 
-func (a *App) StartCall(ctx context.Context, identity, capabilityID string, input json.RawMessage) (string, error) {
+var ErrCapabilityChanged = errors.New("capability changed before run")
+
+func (a *App) startCall(ctx context.Context, identity, capabilityID string, input json.RawMessage) (string, error) {
+	return a.startCallAtRevision(ctx, identity, capabilityID, input, nil)
+}
+
+func (a *App) startCallAtRevision(ctx context.Context, identity, capabilityID string, input json.RawMessage, expectedRevision *int64) (string, error) {
 	if len(input) > call.MaxPayloadBytes {
 		return "", call.ErrPayloadTooLarge
 	}
@@ -87,30 +89,46 @@ func (a *App) StartCall(ctx context.Context, identity, capabilityID string, inpu
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	lease, err := a.beginOperation(context.Background())
+	lease, err := a.beginOperation(ctx)
 	if err != nil {
 		return "", err
 	}
-	a.mutation.RLock()
 	launched := false
+	var gate *sync.RWMutex
+	providerLocked := false
 	defer func() {
 		if !launched {
-			a.mutation.RUnlock()
+			if providerLocked {
+				gate.RUnlock()
+			}
 			lease.done()
 		}
 	}()
 	if err := lease.check(); err != nil {
 		return "", err
 	}
-	if !a.az.Allowed(ctx, identity, capabilityID, authz.Invoke) {
+	if !a.az.Allowed(lease.ctx, identity, capabilityID, authz.Invoke) {
 		return "", errors.New("permission_denied")
 	}
-	c, err := a.cat.GetCapability(ctx, capabilityID)
+	c, err := a.cat.GetCapability(lease.ctx, capabilityID)
 	if err != nil {
 		return "", err
 	}
+	gate = a.providerGate(capabilityProviderID(c))
+	gate.RLock()
+	providerLocked = true
+	c, err = a.cat.GetCapability(lease.ctx, capabilityID)
+	if err != nil {
+		return "", err
+	}
+	if expectedRevision != nil && c.Revision != *expectedRevision {
+		return "", ErrCapabilityChanged
+	}
+	if err := jsoncontract.Validate(c.Input.JSONSchema, input); err != nil {
+		return "", fmt.Errorf("validate capability input: %w", err)
+	}
 	a.mu.Lock()
-	p, ok := a.providers[c.Source.Protocol+"/"+c.Source.Provider]
+	p, ok := a.providers[capabilityProviderID(c)]
 	ad := a.adapters[p.Protocol]
 	state := a.state
 	a.mu.Unlock()
@@ -127,10 +145,10 @@ func (a *App) StartCall(ctx context.Context, identity, capabilityID string, inpu
 	if err != nil {
 		return "", err
 	}
-	if err := a.callDB.Create(ctx, call.Call{ID: id, CapabilityID: capabilityID, IdentityID: identity, State: call.Submitted}, input); err != nil {
+	if err := a.callDB.Create(lease.ctx, call.Call{ID: id, CapabilityID: capabilityID, IdentityID: identity, State: call.Submitted}, input); err != nil {
 		return "", err
 	}
-	runtime := &callRuntime{id: id, owner: identity, capability: c, provider: p, adapter: ad, lease: lease, ready: make(chan struct{}), done: make(chan struct{})}
+	runtime := &callRuntime{id: id, capability: c, provider: p, adapter: ad, lease: lease, gate: gate, done: make(chan struct{})}
 	a.mu.Lock()
 	if a.state != appOpen {
 		a.mu.Unlock()
@@ -152,7 +170,7 @@ func (a *App) runCall(runtime *callRuntime, input json.RawMessage) {
 		delete(a.activeCalls, runtime.id)
 		close(runtime.done)
 		a.mu.Unlock()
-		a.mutation.RUnlock()
+		runtime.gate.RUnlock()
 		runtime.lease.done()
 	}()
 	if err := a.callDB.Transition(context.Background(), runtime.id, call.Working, "", ""); err != nil {
@@ -163,9 +181,14 @@ func (a *App) runCall(runtime *callRuntime, input json.RawMessage) {
 	err := runtime.adapter.Invoke(runtime.lease.ctx, runtime.provider, runtime.capability, runtime.id, input, sink)
 	if err != nil {
 		var adapterErr *provider.AdapterError
+		var missingSecret *secret.MissingError
 		isAdapterErr := errors.As(err, &adapterErr)
 		validAdapterErr := isAdapterErr && adapterErr != nil && adapterErr.Valid()
 		switch {
+		case errors.As(err, &missingSecret) && missingSecret != nil:
+			a.persistTerminal(runtime, func() error {
+				return a.callDB.Transition(context.Background(), runtime.id, call.Failed, "missing_credential", "credential "+missingSecret.Reference+" is missing")
+			})
 		case validAdapterErr && adapterErr.Code() == "canceled":
 			a.persistTerminal(runtime, func() error {
 				return a.callDB.Transition(context.Background(), runtime.id, call.Canceled, adapterErr.Code(), adapterErr.Message())
@@ -186,9 +209,9 @@ func (a *App) runCall(runtime *callRuntime, input json.RawMessage) {
 			a.persistTerminal(runtime, func() error {
 				return a.callDB.Transition(context.Background(), runtime.id, call.Failed, "payload_too_large", "adapter payload exceeded limit")
 			})
-		case errors.Is(err, context.Canceled):
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			a.persistTerminal(runtime, func() error {
-				return a.callDB.Transition(context.Background(), runtime.id, call.Failed, "app_closed", "call canceled during application shutdown")
+				return a.callDB.Transition(context.Background(), runtime.id, call.Canceled, "canceled", "run canceled before completion")
 			})
 		default:
 			a.persistTerminal(runtime, func() error {
@@ -200,6 +223,12 @@ func (a *App) runCall(runtime *callRuntime, input json.RawMessage) {
 	if sink.result == nil {
 		a.persistTerminal(runtime, func() error {
 			return a.callDB.Transition(context.Background(), runtime.id, call.Failed, "missing_result", "adapter invocation returned no result")
+		})
+		return
+	}
+	if err := jsoncontract.Validate(runtime.capability.Output.JSONSchema, sink.result); err != nil {
+		a.persistTerminal(runtime, func() error {
+			return a.callDB.Transition(context.Background(), runtime.id, call.Failed, "invalid_output", "capability output failed schema validation")
 		})
 		return
 	}
@@ -221,7 +250,6 @@ func (a *App) fallbackTerminal(runtime *callRuntime, primaryErr error) {
 	}
 	terminalErr := errors.Join(primaryErr, fallbackErr)
 	a.mu.Lock()
-	runtime.terminalErr = terminalErr
 	a.recordCallErrorLocked(runtime.id, terminalErr)
 	a.mu.Unlock()
 }
@@ -255,13 +283,6 @@ func (a *App) hasCallError(id string) bool {
 	return exists
 }
 
-func (a *App) runtimePersistenceFailed(runtime *callRuntime) bool {
-	a.mu.Lock()
-	failed := runtime.terminalErr != nil
-	a.mu.Unlock()
-	return failed
-}
-
 func (a *App) authorizedCall(ctx context.Context, identity, id string) (call.Record, error) {
 	record, err := a.callDB.Get(ctx, id)
 	if errors.Is(err, call.ErrNotFound) {
@@ -276,7 +297,7 @@ func (a *App) authorizedCall(ctx context.Context, identity, id string) (call.Rec
 	return record, nil
 }
 
-func (a *App) GetCall(ctx context.Context, identity, id string) (call.Record, error) {
+func (a *App) getCall(ctx context.Context, identity, id string) (call.Record, error) {
 	record, err := a.authorizedCall(ctx, identity, id)
 	if err != nil {
 		return call.Record{}, err
@@ -285,102 +306,4 @@ func (a *App) GetCall(ctx context.Context, identity, id string) (call.Record, er
 		return call.Record{}, ErrCallPersistence
 	}
 	return record, nil
-}
-
-func (a *App) ListCallEvents(ctx context.Context, identity, id string) ([]call.Event, error) {
-	page, err := a.ListCallEventPage(ctx, identity, id, 0, call.MaxEventPageSize)
-	return page.Events, err
-}
-
-func (a *App) ListCallEventPage(ctx context.Context, identity, id string, after, limit int) (call.EventPage, error) {
-	if _, err := a.authorizedCall(ctx, identity, id); err != nil {
-		return call.EventPage{}, err
-	}
-	page, err := a.callDB.ListEventPage(ctx, id, after, limit)
-	if errors.Is(err, call.ErrNotFound) {
-		return call.EventPage{}, ErrCallNotFound
-	}
-	return page, err
-}
-
-func (a *App) CancelCall(ctx context.Context, identity, id string) error {
-	record, err := a.authorizedCall(ctx, identity, id)
-	if err != nil {
-		return err
-	}
-	if a.hasCallError(id) {
-		return ErrCallPersistence
-	}
-	if a.cancelBeforeRuntimeSnapshot != nil {
-		a.cancelBeforeRuntimeSnapshot()
-	}
-	c, err := a.cat.GetCapability(ctx, record.Call.CapabilityID)
-	if err != nil {
-		return ErrCallNotFound
-	}
-	if !c.Lifecycle.Cancelable {
-		return ErrCallNotCancelable
-	}
-	lease, err := a.beginOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer lease.done()
-	a.mutation.RLock()
-	defer a.mutation.RUnlock()
-	if err := lease.check(); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	_, persistenceFailed := a.callErrors[id]
-	runtime := a.activeCalls[id]
-	if runtime != nil {
-		lease.target = &providerSession{provider: runtime.provider, adapter: runtime.adapter}
-	}
-	a.mu.Unlock()
-	if persistenceFailed {
-		return ErrCallPersistence
-	}
-	if runtime == nil {
-		return ErrCallNotActive
-	}
-	select {
-	case <-runtime.done:
-		if a.runtimePersistenceFailed(runtime) {
-			return ErrCallPersistence
-		}
-		return ErrCallNotActive
-	default:
-	}
-	select {
-	case <-runtime.ready:
-	case <-runtime.done:
-		if a.runtimePersistenceFailed(runtime) {
-			return ErrCallPersistence
-		}
-		return ErrCallNotActive
-	case <-lease.ctx.Done():
-		return lease.result(lease.ctx.Err())
-	}
-	if err := runtime.adapter.Cancel(lease.ctx, runtime.provider, id); err != nil {
-		var adapterErr *provider.AdapterError
-		if errors.As(err, &adapterErr) {
-			if adapterErr == nil || !adapterErr.Valid() {
-				return ErrCallCancelFailed
-			}
-			if adapterErr.Code() == "not_cancelable" {
-				return ErrCallNotActive
-			}
-		}
-		return err
-	}
-	select {
-	case <-runtime.done:
-		if a.runtimePersistenceFailed(runtime) {
-			return ErrCallPersistence
-		}
-		return nil
-	case <-lease.ctx.Done():
-		return lease.result(lease.ctx.Err())
-	}
 }

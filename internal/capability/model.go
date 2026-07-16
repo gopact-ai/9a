@@ -1,8 +1,6 @@
 package capability
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"regexp"
 	"strings"
@@ -51,21 +49,15 @@ func StableID(protocol, provider, upstream string) string {
 	return Slug(protocol) + "/" + Slug(provider) + "/" + Slug(upstream)
 }
 
-func (c Capability) SkillName(collision bool) string {
-	base := "ninea-" + Slug(c.Source.Protocol) + "-" + Slug(c.Source.Provider) + "-" + Slug(c.Source.UpstreamName)
-	if !collision {
-		return base
-	}
-	sum := sha256.Sum256([]byte(c.ID))
-	return base + "-" + hex.EncodeToString(sum[:4])
-}
-
 func (c Capability) Validate() error {
 	if c.ID == "" || c.Kind == "" || c.Name == "" || c.Description == "" {
 		return errors.New("capability identity is incomplete")
 	}
 	if c.Source.Protocol == "" || c.Source.Provider == "" || c.Source.UpstreamName == "" {
 		return errors.New("capability source is incomplete")
+	}
+	if Slug(c.Source.Protocol) == "" || Slug(c.Source.Provider) == "" || Slug(c.Source.UpstreamName) == "" {
+		return errors.New("capability source cannot form a public reference")
 	}
 	if c.Input.Mode == "" || c.Output.Mode == "" {
 		return errors.New("capability contracts are incomplete")

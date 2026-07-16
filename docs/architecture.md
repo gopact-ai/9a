@@ -1,311 +1,84 @@
 # Architecture
 
-NineA is a protocol-neutral capability layer between upstream systems and AI
-agents. It converts capabilities from MCP tools, A2A agents, and APIs into a
-searchable Catalog, then projects selected capabilities as filesystem-native
-Skills.
+NineA is a local capability runtime. It gives HTTP APIs, MCP servers, and A2A
+agents one workspace-scoped search and execution interface.
 
 ```text
-                    discover
-MCP / A2A / API ─────────────→ Adapter
-                                  │
-                                  ▼
-                         normalized Capability
-                                  │
-                  registry + index + ACL + revision
-                                  ▼
-                      SQLite state + Catalog
-                                  │
-                               project
-                                  ▼
-                         filesystem Skill
-                                  │
-                         explicit command
-                                  ▼
-Agent ─────────────────────→ NineA runtime ─────────→ Adapter ─→ upstream
+.9a/integrations/<name>.yaml ── connect ──→ validated capability index
+                                                    ▲
+.agents/skills/using-ninea ──→ human or agent ── search / inspect ──┘
+                                      └── run ──→ upstream system
 ```
 
-NineA includes built-in declarative API, MCP, and A2A adapters. The executable
-adapter registry extends the same capability model to additional protocols
-without defining a new agent-facing interface.
-
-## Implementation model
-
-### Adapter
-
-An adapter owns the protocol-specific edge. It discovers upstream operations,
-translates them into NineA Capabilities, invokes them, reports health, and
-cancels work when the upstream protocol supports cancellation.
-
-The built-in API adapter compiles strict YAML into HTTP operations and ordered
-workflows. It resolves environment-backed variables at invocation time and
-runs a bounded request/response hook pipeline. This path skips discovery
-because the source is already the operator-reviewed capability declaration.
-
-The built-in MCP and A2A adapters discover capabilities from live upstream
-systems. Separately installed protocol integrations use the
-`9a.adapter/v1` executable contract, so they can be written in any language,
-registered without rebuilding NineA, and isolated as separate processes.
-The generic HTTP adapter is a legacy example of this external executable model;
-new JSON API integrations should normally use declarative YAML.
-
-The executable adapter contract is defined in [Building adapters](adapters.md).
-The current release supports runtime registration of executable adapters, a
-built-in declarative HTTP adapter, an MCP stdio adapter, and single-turn A2A
-HTTP+JSON 1.0 agents. Streaming and multi-turn continuation are not yet
-supported.
-
-The built-in MCP adapter globally admits at most 64 active stdio sessions.
-Discovery, synchronous invocation, and persistent calls share that capacity
-across providers. Capacity is reserved before process start; an additional
-session is rejected without spawning a child. The synchronous API reports that
-adapter rejection as `request_failed`. A persistent call is already admitted
-and returns its ID before adapter invocation; if MCP capacity is then exhausted,
-the call becomes `failed` with code `resource_exhausted`. Completion,
-cancellation, provider close, and failed process start release the reservation.
-
-### Capability
-
-A Capability is the protocol-neutral description of something an agent can do.
-It includes:
-
-- a stable identity, name, kind, and description;
-- its adapter protocol, provider, and upstream name;
-- input and output contracts;
-- synchronous, streaming, multi-turn, and cancellation properties;
-- approval and upstream authentication metadata;
-- tags, examples, revision, and bounded upstream metadata.
-
-NineA owns the normalized identity and source fields. An adapter cannot claim
-another provider's namespace.
-
-### Catalog
-
-The Catalog is a persistent, revisioned inventory of Capabilities. It lets
-NineA hold many capabilities without placing every definition in an agent's
-prompt or Skill directory.
-
-Provider records and executable adapter registrations are also persistent.
-During restore, NineA loads and validates executable registrations before
-restoring providers that depend on them. A missing or invalid registered
-executable fails restore instead of silently publishing an unusable provider.
-
-Search runs locally, applies the caller's `read` ACL before returning results,
-and never contacts or invokes an upstream provider. This gives agents
-progressive capability disclosure: search first, then load the complete Skill
-only when it becomes relevant.
-
-Workspace attach also indexes user-owned Skill directories from
-`.agents/skills`. A digest covers the complete directory, and each search
-reconciles additions, changes, and removals from every attached workspace into
-the same Catalog. NineA-owned projections are excluded to avoid duplicates.
-
-### Skill projection
-
-The workspace projection manager owns attach, update, status, restore, and
-detach. Its registry stores canonical workspace paths and every managed Skill's
-source, target, revision, format, and digest. The CLI resolves workspace paths;
-the daemon never interprets a relative client path.
-
-Each managed Skill is an independent projection. On supported systems the
-FUSE backend mounts that Skill directory as an immutable in-memory snapshot.
-The directory backend publishes the same snapshot through a staging directory,
-records per-file SHA-256 digests, applies read-only modes, and atomically swaps
-complete trees. Independent mountpoints let user-owned Skills remain ordinary
-writable directories beside 9A-managed content.
-
-Every workspace includes the embedded `using-ninea` Skill, which teaches AI
-agents how to operate and extend NineA. It is versioned with the installed
-binary and reconciled automatically after an upgrade.
-
-MCP, A2A, and custom adapters selectively project one visible Capability as an
-ordinary Agent Skill:
-
-```text
-ninea-mcp-weather-get-weather/
-  SKILL.md
-  schema.json
-  references/upstream.json
-  scripts/invoke
-```
-
-The views contain instructions, a machine-readable contract, bounded
-provenance, and a small invocation entry point. NineA refuses to overwrite
-paths it does not own.
-
-Projection is deliberately selective. The Catalog may contain thousands of
-capabilities while an agent's Skill directory contains only the few needed for
-its current work.
-
-A declarative API source is already grouped by domain, so `9a add` projects one
-Skill containing all of its operations and workflows:
-
-```text
-weather/
-  SKILL.md
-  operations/
-    current-weather/
-      schema.json
-      invoke
-  workflows/
-    city-weather/
-      schema.json
-      invoke
-  references/source.yaml
-```
-
-The source and managed projection location are persisted. A
-daemon restart restores the compiled adapter registration without requiring the
-original YAML file to remain at its import path.
-
-### Runtime, calls, and authorization
-
-Discovery, reading, and execution are separate operations:
-
-- `read` permits search and projection;
-- `invoke` permits execution;
-- `admin` permits adapter, provider, token, and ACL management.
-
-Reading a projected Skill has no upstream side effect. The invocation script
-sends structured input to `9a daemon`, which authenticates the caller, checks the
-Capability ACL, locates the originating provider, and routes the call through
-its adapter.
-
-This separation preserves filesystem semantics: inspecting instructions is
-passive, while running a command is an explicit action.
-
-NineA offers two execution paths over the same adapter invocation:
-
-- synchronous `invoke` waits for a terminal result in the client request;
-- `calls start` persists the input and returns a call ID, while a background
-  invocation records state, result, events, and artifacts in SQLite.
-
-Call records and event pages are visible only to their owner or an
-administrator. Event sequence numbers, individual payloads, total event count,
-aggregate bytes, and page size are bounded. Cancellation is attempted only for
-an active call whose Capability declares `cancelable`; terminal ownership is
-resolved before a canceled state is persisted.
-
-Terminal call records, results, and events survive daemon restart. A clean
-shutdown completes active calls as `failed` with code `app_closed`. If a crash
-or another interruption leaves an active record in SQLite, restore completes
-that record as `failed` with code `daemon_restarted`; the work is not resumed.
-
-Admission is calculated from persisted SQLite state, so concurrency limits and
-retained-storage limits survive restart:
-
-| Scope | Active calls | Retained calls | Retained bytes |
-| --- | ---: | ---: | ---: |
-| One identity | 8 | 1,000 | 256 MiB |
-| Whole database | 64 | 10,000 | 2 GiB |
-
-Retained bytes count call inputs, terminal results, and persisted event
-envelopes. A terminal transition releases active capacity, but the call record
-and all of its bytes remain retained. This release has no call deletion,
-retention expiry, or garbage collection; an exhausted retained quota requires
-offline archival or replacement of the state database before new calls can be
-admitted.
-
-## Why command line and filesystem
-
-AI agents already treat files and commands as first-class working interfaces.
-They can navigate repositories, read instructions, inspect schemas, compose
-shell pipelines, and run narrowly scoped programs without learning a new UI or
-embedding a new SDK.
-
-NineA assigns a distinct responsibility to each interface:
-
-| Interface | Responsibility |
-| --- | --- |
-| Filesystem | Discovery, instructions, schemas, provenance, and local composition |
-| Command line | Explicit invocation, structured input/output, and visible side effects |
-| NineA socket | Authentication, authorization, routing, and request transport |
-| Adapter process | Upstream protocol, credentials, and result translation |
-
-This boundary is useful for both agents and people. The same Skill can be
-inspected in an editor, audited with ordinary file tools, invoked from a shell,
-or loaded by an Agent Skills implementation. No vendor-specific tool registry
-is required on the consumer side.
-
-Files do not replace the runtime. Representing a remote action only as writable
-files would blur inspection and execution. NineA instead uses files for passive
-capability disclosure and commands for active operations.
-
-## The Plan 9 connection
-
-Plan 9 from Bell Labs organized a distributed system around three closely
-related ideas:
-
-1. resources are named and accessed like files in a hierarchy;
-2. a standard protocol, 9P, accesses local and remote file services;
-3. separate hierarchies are assembled into a process-specific namespace.
-
-The important lesson is not the slogan "everything is a file." It is that
-heterogeneous resources become easier to understand and combine when they are
-presented through a small, consistent interface and assembled into the user's
-own namespace.
-
-NineA applies that lesson to agent capabilities:
-
-```text
-Plan 9: distributed resources  → file-like services → private namespace
-NineA: distributed capabilities → Skills            → agent namespace
-```
-
-NineA does not implement 9P and does not claim that remote actions are files.
-It borrows the namespace principle: adapters hide heterogeneous protocols, and
-operators can project a local, inspectable Skill view for each agent.
-
-For selectively projected capabilities, `read` authorization gates search and
-projection, but the
-result is an ordinary caller-selected directory. NineA does not enforce access
-to those files after projection. Operators that need isolated agent views must
-use separate directories and operating-system permissions.
-
-Primary references:
-
-- [Plan 9 from Bell Labs](https://9p.io/sys/doc/9.html)
-- [The Use of Name Spaces in Plan 9](https://9p.io/sys/doc/names.html)
-
-## End-to-end data flow
-
-### Discovery
-
-1. An administrator registers a provider under an adapter protocol.
-2. NineA asks the adapter to discover upstream operations.
-3. The adapter returns protocol-neutral capability descriptions.
-4. The current 0.x release validates required identity and contract fields. The
-   executable adapter contract additionally requires schema shape, lifecycle,
-   and message-bound validation before external adapters are accepted.
-5. The Catalog atomically replaces that provider's previous revision.
-
-Declarative API sources replace the first three steps with strict local
-compilation: parse the YAML, validate services, references, hooks, and workflow
-ordering, derive Capabilities, then persist them through the same Catalog.
-
-### Projection
-
-1. An agent searches the Catalog using its own token.
-2. NineA filters results using the agent's `read` permission.
-3. The agent selects one Capability.
-4. NineA generates an owned Skill directory without contacting the provider.
-
-### Invocation
-
-1. The agent reads the Skill and prepares JSON input.
-2. The agent explicitly runs `scripts/invoke`.
-3. `9a daemon` authenticates the token and checks `invoke` permission.
-4. NineA routes the request through the Capability's adapter and provider.
-5. The adapter translates the upstream result into a structured NineA result.
-
-### Persistent call
-
-1. The agent sends JSON input with `calls start` and receives a call ID.
-2. NineA persists the submitted record before launching the adapter invocation.
-3. Adapter events and artifacts are appended with monotonic sequence numbers.
-4. `calls get` reads state and result; `calls events` reads bounded pages.
-5. If supported, `calls cancel` asks the active adapter invocation to confirm
-   cancellation before NineA records a canceled terminal state.
-
-The Catalog and projected Skill remain useful even if the upstream provider is
-temporarily unavailable. Only invocation depends on the live upstream system.
+## Public model
+
+- An **integration** is one external system and one canonical source.
+- A **capability** is one runnable action, addressed as
+  `<integration>/<capability>`.
+- A **workspace** is the project that owns the integration sources and exposes
+  those capabilities to its agent.
+
+Protocol names, internal identifiers, and process details stay behind this
+interface.
+
+## State ownership
+
+| State | Role | Editable |
+| --- | --- | --- |
+| `.9a/integrations/<name>.yaml` | Canonical integration source | Yes |
+| Operating system credential store (system keyring) | Secret values | Through `9a secret` |
+| Local database | Connected-source index, cached capability contracts, secret metadata, and call records | No |
+| `.agents/skills/using-ninea` | Shared agent gateway | No |
+
+`connect` strictly validates a source before replacing the active integration.
+A failed update restores the last working source and runtime registration.
+`disconnect` removes only the active registration; it retains the canonical
+source and shared gateway Skill.
+
+For integration configuration, the database is only an index of canonical
+workspace sources and their cached capability contracts. It never replaces a
+manifest and never contains secret values.
+
+Startup restore is passive. NineA uses the database to locate sources that were
+already connected, validates those local files, and restores HTTP definitions
+locally. It does not scan for unconnected manifests, start an MCP executable,
+or contact an A2A endpoint. MCP and A2A keep their last validated capability
+contracts when the source still matches the last `connect`. A missing, invalid,
+or mismatched source is reported as broken instead of triggering upstream
+discovery.
+
+## Integration types
+
+- HTTP manifests compile declared services, capabilities, workflows, hooks,
+  and JSON Schemas into runtime entries.
+- MCP integrations start one absolute executable and discover its tools.
+- A2A integrations connect to an HTTPS endpoint and discover the remote
+  agent's capabilities.
+
+All three expose the same short references. Callers use `search` and `run`
+without learning protocol-specific execution details.
+
+NineA installs one `using-ninea` gateway Skill per workspace. It contains the
+stable workflow for `status`, `search`, and `run`. All integrations share it;
+there are no capability-specific Skill directories.
+
+## Execution path
+
+1. `run` resolves the short capability reference in the workspace index.
+2. NineA verifies that it belongs to the current workspace and checks whether
+   explicit approval is required.
+3. NineA validates the JSON input and creates a persistent call record.
+4. The selected integration runtime invokes the upstream system.
+5. NineA validates the result schema before marking the call complete.
+
+Invalid input and missing approval are rejected before contacting the upstream
+system. Accepted calls have a stable call ID so failures can be correlated with
+persisted state. Credential aliases are resolved from the operating system
+credential store at invocation time.
+
+## Local process boundary
+
+The CLI communicates with an automatically started local runtime. It owns
+capability lookup, call persistence, credential resolution, and upstream
+execution. Searching, status, and read-only diagnosis remain passive. During
+normal capability use, `run` crosses the upstream side-effect boundary.

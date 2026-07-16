@@ -1,6 +1,16 @@
 package workspace
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"path/filepath"
+	"time"
+)
+
+func StableID(root string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(root)))
+	return "ws-" + hex.EncodeToString(sum[:8])
+}
 
 type BackendPolicy string
 type Backend string
@@ -8,28 +18,24 @@ type State string
 
 const (
 	PolicyAuto       BackendPolicy = "auto"
-	PolicyFUSE       BackendPolicy = "fuse"
 	PolicyDirectory  BackendPolicy = "directory"
-	BackendFUSE      Backend       = "fuse"
 	BackendDirectory Backend       = "directory"
 	StateHealthy     State         = "healthy"
-	StateFallback    State         = "fallback"
 	StateDegraded    State         = "degraded"
 	StateTampered    State         = "tampered"
 	StateDetached    State         = "detached"
 )
 
 type Workspace struct {
-	ID             string        `json:"id"`
-	Root           string        `json:"root"`
-	SkillsRoot     string        `json:"skills_root"`
-	Policy         BackendPolicy `json:"policy"`
-	Backend        Backend       `json:"backend"`
-	State          State         `json:"state"`
-	FallbackReason string        `json:"fallback_reason,omitempty"`
-	Format         int           `json:"format"`
-	CreatedAt      time.Time     `json:"created_at"`
-	UpdatedAt      time.Time     `json:"updated_at"`
+	ID         string        `json:"id"`
+	Root       string        `json:"root"`
+	SkillsRoot string        `json:"skills_root"`
+	Policy     BackendPolicy `json:"policy"`
+	Backend    Backend       `json:"backend"`
+	State      State         `json:"state"`
+	Format     int           `json:"format"`
+	CreatedAt  time.Time     `json:"created_at"`
+	UpdatedAt  time.Time     `json:"updated_at"`
 }
 
 type ManagedSkill struct {

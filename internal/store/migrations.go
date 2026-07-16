@@ -6,12 +6,11 @@ import (
 	"fmt"
 )
 
+const schemaVersion = 1
+
 const schema = `
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 INSERT OR IGNORE INTO metadata(key,value) VALUES ('catalog_revision',0);
-CREATE TABLE IF NOT EXISTS external_adapters (
- protocol TEXT PRIMARY KEY, executable TEXT NOT NULL, created_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS providers (
  id TEXT PRIMARY KEY, protocol TEXT NOT NULL, name TEXT NOT NULL, endpoint TEXT NOT NULL,
  revision INTEGER NOT NULL, config_json BLOB NOT NULL DEFAULT '{}'
@@ -24,11 +23,11 @@ CREATE TABLE IF NOT EXISTS capabilities (
 CREATE VIRTUAL TABLE IF NOT EXISTS capability_fts USING fts5(id UNINDEXED, name, description, tags, examples);
 CREATE TABLE IF NOT EXISTS acl (identity_id TEXT NOT NULL, capability_id TEXT NOT NULL, permission TEXT NOT NULL, PRIMARY KEY(identity_id,capability_id,permission));
 CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, identity_id TEXT NOT NULL, created_at TEXT NOT NULL);
-DROP TABLE IF EXISTS projections;
+CREATE TABLE IF NOT EXISTS secrets (name TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workspaces (
  id TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE, skills_root TEXT NOT NULL,
  policy TEXT NOT NULL, backend TEXT NOT NULL, state TEXT NOT NULL,
- fallback_reason TEXT NOT NULL DEFAULT '', format INTEGER NOT NULL,
+ format INTEGER NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS managed_skills (
@@ -45,21 +44,22 @@ CREATE TABLE IF NOT EXISTS call_results (call_id TEXT PRIMARY KEY REFERENCES cal
 CREATE TABLE IF NOT EXISTS call_event_usage (call_id TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE, event_count INTEGER NOT NULL DEFAULT 0 CHECK(event_count >= 0), byte_count INTEGER NOT NULL DEFAULT 0 CHECK(byte_count >= 0));
 CREATE TABLE IF NOT EXISTS call_storage_usage (call_id TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE, byte_count INTEGER NOT NULL DEFAULT 0 CHECK(byte_count >= 0));
 CREATE TABLE IF NOT EXISTS events (call_id TEXT NOT NULL REFERENCES calls(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, data_json BLOB NOT NULL, PRIMARY KEY(call_id,sequence));
-CREATE TABLE IF NOT EXISTS usage (identity_id TEXT NOT NULL, capability_id TEXT NOT NULL, successes INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, last_used_at TEXT, PRIMARY KEY(identity_id,capability_id));
-INSERT INTO call_storage_usage(call_id,byte_count)
-SELECT c.id,
-       coalesce(length(i.data_json),0) +
-       coalesce(length(r.data_json),0) +
-       coalesce((SELECT sum(length(e.data_json)) FROM events e WHERE e.call_id=c.id),0)
-FROM calls c
-LEFT JOIN call_inputs i ON i.call_id=c.id
-LEFT JOIN call_results r ON r.call_id=c.id
-ON CONFLICT(call_id) DO UPDATE SET byte_count=excluded.byte_count;
 `
 
-func migrate(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("migrate sqlite: %w", err)
+func initializeSchema(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin sqlite schema initialization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, schema); err != nil {
+		return fmt.Errorf("initialize sqlite schema: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 1`); err != nil {
+		return fmt.Errorf("set sqlite schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sqlite schema initialization: %w", err)
 	}
 	return nil
 }

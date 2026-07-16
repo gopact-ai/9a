@@ -10,167 +10,303 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sort"
+	"os/signal"
+	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gopact-ai/9a/internal/api"
 	callmodel "github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/declarative"
+	"github.com/gopact-ai/9a/internal/secret"
 	workspacepkg "github.com/gopact-ai/9a/internal/workspace"
+	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 )
 
-type validationResult struct {
-	Valid        bool     `json:"valid"`
-	Name         string   `json:"name"`
-	Digest       string   `json:"digest"`
-	Capabilities []string `json:"capabilities"`
-}
+const maxSecretBytes = secret.MaxValueBytes
 
-func readDeclarativeFile(path string) ([]byte, *declarative.Config, error) {
+func readManifestFile(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	defer file.Close()
 	source, err := io.ReadAll(io.LimitReader(file, declarative.MaxSourceBytes+1))
+	closeErr := file.Close()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	if len(source) > declarative.MaxSourceBytes {
-		return nil, nil, fmt.Errorf("source exceeds %d bytes", declarative.MaxSourceBytes)
+		return nil, fmt.Errorf("source exceeds %d bytes", declarative.MaxSourceBytes)
 	}
-	config, err := declarative.Parse(source)
-	if err != nil {
-		return nil, nil, err
+	if _, err := declarative.Parse(source); err != nil {
+		return nil, err
 	}
-	return source, config, nil
+	return source, nil
 }
 
-func validateDeclarativeFile(path string) (validationResult, error) {
-	_, config, err := readDeclarativeFile(path)
-	if err != nil {
-		return validationResult{}, err
-	}
-	capabilities := make([]string, 0, len(config.Operations)+len(config.Workflows))
-	for name := range config.Operations {
-		capabilities = append(capabilities, "api/"+config.Metadata.Name+"/"+name)
-	}
-	for name := range config.Workflows {
-		capabilities = append(capabilities, "api/"+config.Metadata.Name+"/"+name)
-	}
-	sort.Strings(capabilities)
-	return validationResult{Valid: true, Name: config.Metadata.Name, Digest: config.Digest, Capabilities: capabilities}, nil
-}
-
-func declarativeFileRequest(action, path, cwd string) (api.Request, error) {
-	if action != "add" && action != "diff" {
-		return api.Request{}, fmt.Errorf("unsupported declarative action %q", action)
-	}
-	source, _, err := readDeclarativeFile(path)
+func connectRequest(path, cwd string) (api.Request, error) {
+	source, err := readManifestFile(path)
 	if err != nil {
 		return api.Request{}, err
 	}
-	root, err := filepath.Abs(cwd)
+	root, err := workspacepkg.Resolve("", cwd)
 	if err != nil {
 		return api.Request{}, err
 	}
-	return api.Request{Action: "declarative." + action, Source: string(source), Root: root}, nil
+	return api.Request{Action: "connect", Source: string(source), Root: root}, nil
 }
 
-func declarativeRemoveRequest(name string) api.Request {
-	return api.Request{Action: "declarative.remove", Name: name}
+type protocolManifest struct {
+	Version    int    `yaml:"version"`
+	Name       string `yaml:"name"`
+	Type       string `yaml:"type"`
+	Executable string `yaml:"executable,omitempty"`
+	URL        string `yaml:"url,omitempty"`
 }
 
-func workspaceCommandRequest(command, workspace, backend, cwd string, check, all bool) (api.Request, error) {
-	if command != "attach" && command != "status" && command != "update" && command != "detach" {
-		return api.Request{}, fmt.Errorf("unsupported workspace command %q", command)
+func protocolConnectRequest(protocol, name, target, cwd string) (api.Request, error) {
+	if name == "" {
+		return api.Request{}, fmt.Errorf("--name must be a canonical non-empty slug")
 	}
-	if command != "attach" && backend != "auto" {
-		return api.Request{}, fmt.Errorf("--backend is only valid with attach")
+	if err := validateIntegrationName(name); err != nil {
+		return api.Request{}, err
 	}
+	manifest := protocolManifest{Version: 1, Name: name, Type: protocol}
+	switch protocol {
+	case "mcp":
+		manifest.Executable = target
+	case "a2a":
+		manifest.URL = target
+	default:
+		return api.Request{}, fmt.Errorf("unsupported integration type %q", protocol)
+	}
+	source, err := yaml.Marshal(manifest)
+	if err != nil {
+		return api.Request{}, fmt.Errorf("encode manifest: %w", err)
+	}
+	if _, err := declarative.Parse(source); err != nil {
+		return api.Request{}, err
+	}
+	root, err := workspacepkg.Resolve("", cwd)
+	if err != nil {
+		return api.Request{}, err
+	}
+	return api.Request{Action: "connect", Source: string(source), Root: root}, nil
+}
+
+func statusRequest(workspace, cwd, integration string) (api.Request, error) {
 	root, err := workspacepkg.Resolve(workspace, cwd)
 	if err != nil {
 		return api.Request{}, err
 	}
-	action := map[string]string{"attach": "workspace.attach", "status": "workspace.status", "update": "workspace.update", "detach": "workspace.detach"}[command]
-	if command != "update" && (check || all) {
-		return api.Request{}, fmt.Errorf("--check and --all are only valid with update")
+	if err := validateIntegrationName(integration); err != nil {
+		return api.Request{}, err
 	}
-	if check && all {
-		return api.Request{}, fmt.Errorf("--check and --all are mutually exclusive")
-	}
-	return api.Request{Action: action, Root: root, Backend: backend, Check: check, All: all}, nil
+	return api.Request{Action: "status", Root: root, Name: integration}, nil
 }
 
-func workspaceForProjectionRoot(root string) string {
-	clean := filepath.Clean(root)
-	parent := filepath.Dir(clean)
-	if filepath.Base(clean) == "skills" && (filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".claude") {
-		return filepath.Dir(parent)
+func doctorRequest(workspace, cwd string, fix bool) (api.Request, error) {
+	root, err := workspacepkg.Resolve(workspace, cwd)
+	if err != nil {
+		return api.Request{}, err
 	}
-	return parent
+	return api.Request{Action: "doctor", Root: root, Fix: fix}, nil
 }
 
-func adapterAddRequest(protocol, executable string) api.Request {
-	return api.Request{Action: "adapter.add", Protocol: protocol, Executable: executable}
+func disconnectRequest(name, cwd string) (api.Request, error) {
+	if name == "" {
+		return api.Request{}, fmt.Errorf("integration must be a canonical non-empty slug")
+	}
+	if err := validateIntegrationName(name); err != nil {
+		return api.Request{}, err
+	}
+	root, err := workspacepkg.Resolve("", cwd)
+	if err != nil {
+		return api.Request{}, err
+	}
+	return api.Request{Action: "disconnect", Name: name, Root: root}, nil
 }
 
-func readInvocationInput(stdin io.Reader) (json.RawMessage, error) {
-	input, err := io.ReadAll(io.LimitReader(stdin, callmodel.MaxPayloadBytes+1))
+func secretSetRequest(reference string, reader io.Reader, errorOutput io.Writer) (api.Request, error) {
+	if err := secret.ValidateReference(reference); err != nil {
+		return api.Request{}, err
+	}
+	value, err := readSecretValue(reader, errorOutput, reference)
+	if err != nil {
+		return api.Request{}, err
+	}
+	return api.Request{Action: "secret.set", Name: reference, Value: value}, nil
+}
+
+func secretListRequest(integration string) (api.Request, error) {
+	if err := validateIntegrationName(integration); err != nil {
+		return api.Request{}, err
+	}
+	return api.Request{Action: "secret.list", Name: integration}, nil
+}
+
+func validateIntegrationName(integration string) error {
+	if integration != "" && (strings.TrimSpace(integration) != integration || secret.ValidateReference(integration+".value") != nil) {
+		return fmt.Errorf("integration must be a canonical non-empty slug")
+	}
+	return nil
+}
+
+func secretUnsetRequest(reference string) (api.Request, error) {
+	if err := secret.ValidateReference(reference); err != nil {
+		return api.Request{}, err
+	}
+	return api.Request{Action: "secret.unset", Name: reference}, nil
+}
+
+func readSecretValue(reader io.Reader, errorOutput io.Writer, reference string) (string, error) {
+	if file, ok := reader.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		if _, err := fmt.Fprintf(errorOutput, "Secret for %s: ", reference); err != nil {
+			return "", err
+		}
+		value, err := term.ReadPassword(int(file.Fd()))
+		_, newlineErr := fmt.Fprintln(errorOutput)
+		if err != nil {
+			return "", fmt.Errorf("read secret: %w", err)
+		}
+		if newlineErr != nil {
+			return "", newlineErr
+		}
+		return validateSecretValue(value)
+	}
+	value, err := io.ReadAll(io.LimitReader(reader, maxSecretBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read secret: %w", err)
+	}
+	value = bytes.TrimSuffix(value, []byte("\n"))
+	value = bytes.TrimSuffix(value, []byte("\r"))
+	return validateSecretValue(value)
+}
+
+func validateSecretValue(value []byte) (string, error) {
+	if len(value) == 0 {
+		return "", fmt.Errorf("secret value is empty")
+	}
+	if len(value) > maxSecretBytes {
+		return "", fmt.Errorf("secret value exceeds %d bytes", maxSecretBytes)
+	}
+	if !utf8.Valid(value) {
+		return "", fmt.Errorf("secret value is not valid UTF-8")
+	}
+	return string(value), nil
+}
+
+func readInput(reader io.Reader) ([]byte, error) {
+	input, err := io.ReadAll(io.LimitReader(reader, callmodel.MaxPayloadBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(input) > callmodel.MaxPayloadBytes {
 		return nil, fmt.Errorf("payload_too_large: %w", callmodel.ErrPayloadTooLarge)
 	}
+	return input, nil
+}
+
+func readOptionalStdin(stdin io.Reader) ([]byte, error) {
+	if file, ok := stdin.(*os.File); ok {
+		info, err := file.Stat()
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeCharDevice != 0 {
+			return nil, nil
+		}
+	}
+	return readInput(stdin)
+}
+
+func capabilityRunRequest(capability, flagInput string, stdin io.Reader) (api.Request, error) {
+	parts := strings.Split(capability, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) != parts[0] || strings.TrimSpace(parts[1]) != parts[1] || parts[0] == "" || parts[1] == "" || secret.ValidateReference(parts[0]+"."+parts[1]) != nil {
+		return api.Request{}, fmt.Errorf("capability must use <integration>/<capability>")
+	}
+	trimmedFlagInput := strings.TrimSpace(flagInput)
+	if trimmedFlagInput == "-" {
+		input, err := readInput(stdin)
+		if err != nil {
+			return api.Request{}, fmt.Errorf("read stdin: %w", err)
+		}
+		return runRequestWithInput(capability, input)
+	}
+
+	stdinInput, err := readOptionalStdin(stdin)
+	if err != nil {
+		return api.Request{}, fmt.Errorf("read stdin: %w", err)
+	}
+	if trimmedFlagInput != "" && len(bytes.TrimSpace(stdinInput)) > 0 {
+		return api.Request{}, fmt.Errorf("provide JSON through only one of --input or stdin")
+	}
+	input := stdinInput
+	if trimmedFlagInput != "" {
+		if strings.HasPrefix(trimmedFlagInput, "@") {
+			path := strings.TrimPrefix(trimmedFlagInput, "@")
+			if path == "" {
+				return api.Request{}, fmt.Errorf("--input @path requires a file path")
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return api.Request{}, fmt.Errorf("read input file %q: %w", path, err)
+			}
+			input, err = readInput(file)
+			closeErr := file.Close()
+			if err != nil {
+				return api.Request{}, fmt.Errorf("read input file %q: %w", path, err)
+			}
+			if closeErr != nil {
+				return api.Request{}, fmt.Errorf("close input file %q: %w", path, closeErr)
+			}
+		} else {
+			input, err = readInput(strings.NewReader(flagInput))
+			if err != nil {
+				return api.Request{}, err
+			}
+		}
+	}
+	return runRequestWithInput(capability, input)
+}
+
+func runRequestWithInput(capability string, input []byte) (api.Request, error) {
 	if len(bytes.TrimSpace(input)) == 0 {
 		input = []byte("{}")
 	}
 	if !json.Valid(input) {
-		return nil, fmt.Errorf("stdin must contain one valid JSON value")
+		return api.Request{}, fmt.Errorf("input must contain one valid JSON value")
 	}
-	return input, nil
-}
-
-func invokeRequest(capability string, stdin io.Reader) (api.Request, error) {
-	input, err := readInvocationInput(stdin)
-	if err != nil {
-		return api.Request{}, err
-	}
-	return api.Request{Action: "invoke", Capability: capability, Input: input}, nil
-}
-
-func callsRequest(command, target string, stdin io.Reader, after, limit int) (api.Request, bool, error) {
-	switch command {
-	case "start":
-		input, err := readInvocationInput(stdin)
-		if err != nil {
-			return api.Request{}, false, err
-		}
-		return api.Request{Action: "call.start", Capability: target, Input: input}, true, nil
-	case "get":
-		return api.Request{Action: "call.get", CallID: target}, false, nil
-	case "events":
-		if after < 0 {
-			return api.Request{}, false, fmt.Errorf("after sequence must be zero or greater")
-		}
-		if limit < 0 {
-			return api.Request{}, false, fmt.Errorf("event limit must be zero or greater")
-		}
-		return api.Request{Action: "call.events", CallID: target, After: after, Limit: limit}, false, nil
-	case "cancel":
-		return api.Request{Action: "call.cancel", CallID: target}, false, nil
-	default:
-		return api.Request{}, false, fmt.Errorf("unsupported calls command %q", command)
-	}
+	return api.Request{Action: "run", Capability: capability, Input: input}, nil
 }
 
 type rpcError struct {
-	code    string
-	message string
-	data    json.RawMessage
+	code           string
+	message        string
+	data           json.RawMessage
+	machineWritten bool
 }
+
+type rpcTransportError struct {
+	action             string
+	requestMayHaveSent bool
+	err                error
+}
+
+func (e *rpcTransportError) Error() string {
+	if e.action == "run" && e.requestMayHaveSent {
+		return "local runtime connection failed after the run may have started; check upstream state before retrying: " + e.err.Error()
+	}
+	return "local runtime connection failed: " + e.err.Error()
+}
+
+func (e *rpcTransportError) Unwrap() error { return e.err }
 
 func (e *rpcError) Error() string {
 	if e.code == "" {
@@ -201,30 +337,38 @@ func localRPCConfig(getenv func(string) string, paths localPaths) (string, strin
 	return socket, token, nil
 }
 
-func doRPC(body []byte, socket, token string) (json.RawMessage, error) {
+func doRPC(ctx context.Context, body []byte, socket, token, action string) (json.RawMessage, error) {
+	var connected atomic.Bool
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
+		connection, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
+		if err == nil {
+			connected.Store(true)
+		}
+		return connection, err
 	}}
 	defer transport.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://unix/rpc", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/rpc", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := (&http.Client{Transport: transport, Timeout: 30 * time.Second}).Do(req)
+	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &rpcTransportError{action: action, requestMayHaveSent: connected.Load(), err: err}
 	}
-	defer resp.Body.Close()
 	var out struct {
 		Data  json.RawMessage `json:"data"`
 		Error string          `json:"error"`
 		Code  string          `json:"code"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+		_ = resp.Body.Close()
+		return nil, &rpcTransportError{action: action, requestMayHaveSent: true, err: err}
+	}
+	if err := resp.Body.Close(); err != nil {
+		return nil, &rpcTransportError{action: action, requestMayHaveSent: true, err: err}
 	}
 	if resp.StatusCode >= http.StatusMultipleChoices || out.Error != "" {
 		if out.Error == "" {
@@ -235,31 +379,32 @@ func doRPC(body []byte, socket, token string) (json.RawMessage, error) {
 	return out.Data, nil
 }
 
-func callRPC(q api.Request) (json.RawMessage, error) {
+func callRPCContext(ctx context.Context, q api.Request) (json.RawMessage, error) {
 	paths, err := defaultLocalPaths()
 	if err != nil {
-		return nil, err
+		return nil, &rpcTransportError{action: q.Action, err: err}
 	}
 	socket, token, err := localRPCConfig(os.Getenv, paths)
 	if err != nil {
-		return nil, err
+		return nil, &rpcTransportError{action: q.Action, err: err}
 	}
 	body, err := json.Marshal(q)
 	if err != nil {
 		return nil, err
 	}
-	data, err := doRPC(body, socket, token)
-	if !daemonUnavailable(err) {
+	data, err := doRPC(ctx, body, socket, token, q.Action)
+	var transportErr *rpcTransportError
+	if !errors.As(err, &transportErr) || transportErr.requestMayHaveSent || !daemonUnavailable(err) {
 		return data, err
 	}
 	if err := startLocalDaemon(paths, socket); err != nil {
-		return nil, fmt.Errorf("start local daemon: %w; log: %s", err, paths.log)
+		return nil, &rpcTransportError{action: q.Action, err: fmt.Errorf("start local daemon: %w; log: %s", err, paths.log)}
 	}
 	_, token, err = localRPCConfig(os.Getenv, paths)
 	if err != nil {
-		return nil, err
+		return nil, &rpcTransportError{action: q.Action, err: err}
 	}
-	return doRPC(body, socket, token)
+	return doRPC(ctx, body, socket, token, q.Action)
 }
 
 func main() {
@@ -271,8 +416,22 @@ func main() {
 	root.SetIn(os.Stdin)
 	root.SetOut(os.Stdout)
 	root.SetErr(os.Stderr)
-	if _, err := root.ExecuteC(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	executed, err := root.ExecuteContextC(ctx)
+	if err != nil {
+		if executed == nil {
+			executed = root
+		}
 		var remote *rpcError
+		if wantsJSON(executed) {
+			if !errors.As(err, &remote) || !remote.machineWritten {
+				if outputErr := writeTopLevelMachineError(executed, err); outputErr != nil {
+					fmt.Fprintln(os.Stderr, "Error:", outputErr)
+				}
+			}
+			os.Exit(1)
+		}
 		if errors.As(err, &remote) && len(remote.data) > 0 && string(remote.data) != "null" {
 			_, _ = os.Stderr.Write(remote.data)
 			_, _ = os.Stderr.Write([]byte("\n"))

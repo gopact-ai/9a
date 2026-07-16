@@ -10,18 +10,6 @@ func TestStableID(t *testing.T) {
 	}
 }
 
-func TestSkillNameUsesStableSuffixOnCollision(t *testing.T) {
-	t.Parallel()
-	c := Capability{ID: "mcp/weather/get_weather", Source: Source{Protocol: "mcp", Provider: "weather", UpstreamName: "get_weather"}}
-	base := c.SkillName(false)
-	if base != "ninea-mcp-weather-get-weather" {
-		t.Fatalf("SkillName(false) = %q", base)
-	}
-	if got := c.SkillName(true); got == base || len(got) <= len(base)+1 {
-		t.Fatalf("SkillName(true) = %q, want deterministic suffix", got)
-	}
-}
-
 func TestValidateRequiresIdentityAndContracts(t *testing.T) {
 	t.Parallel()
 	if err := (Capability{}).Validate(); err == nil {
@@ -35,5 +23,9 @@ func TestValidateRequiresIdentityAndContracts(t *testing.T) {
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+	c.Source.UpstreamName = "!!!"
+	if err := c.Validate(); err == nil {
+		t.Fatal("Validate() accepted a source with no public reference")
 	}
 }

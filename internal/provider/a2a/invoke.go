@@ -14,13 +14,13 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/secret"
 )
 
 var ErrInvalidInput = errors.New("invalid A2A invoke input")
@@ -35,6 +35,91 @@ type invokeInput struct {
 	Parts         []json.RawMessage   `json:"parts"`
 	Configuration *inputConfiguration `json:"configuration,omitempty"`
 	Metadata      json.RawMessage     `json:"metadata,omitempty"`
+}
+
+func invokeInputSchema() map[string]any {
+	part := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"text": map[string]any{
+				"type":      "string",
+				"maxLength": maxBodyBytes,
+			},
+			"raw": map[string]any{
+				"type":      "string",
+				"maxLength": 4 * ((maxBodyBytes + 2) / 3),
+				"pattern":   `^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$`,
+			},
+			"url": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": maxStringBytes / utf8.UTFMax,
+				"anyOf": []any{
+					map[string]any{"pattern": `^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:[/?#](?:[A-Za-z0-9._~:/?#@!$&'()*+,;=\[\]-]|%[0-9A-Fa-f]{2})*)?$`},
+					map[string]any{
+						"allOf": []any{
+							map[string]any{"pattern": `^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?#@!$&'()*+,;=\[\]-]|%[0-9A-Fa-f]{2})+$`},
+							map[string]any{"not": map[string]any{"pattern": `^https?:`}},
+						},
+					},
+				},
+			},
+			"data":     map[string]any{},
+			"metadata": map[string]any{"type": "object"},
+			"filename": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": maxStringBytes / utf8.UTFMax,
+			},
+			"mediaType": map[string]any{
+				"type":      "string",
+				"minLength": 3,
+				"maxLength": maxStringBytes,
+				"pattern":   "^[A-Za-z0-9!#$%&'*+.^_`|~-]+/[A-Za-z0-9!#$%&'*+.^_`|~-]+$",
+			},
+		},
+		"oneOf": []any{
+			map[string]any{"required": []string{"text"}},
+			map[string]any{"required": []string{"raw"}},
+			map[string]any{"required": []string{"url"}},
+			map[string]any{"required": []string{"data"}},
+		},
+	}
+	return map[string]any{
+		"type":                 "object",
+		"required":             []string{"parts"},
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"parts": map[string]any{
+				"type":     "array",
+				"minItems": 1,
+				"maxItems": maxListItems,
+				"items":    part,
+			},
+			"configuration": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"acceptedOutputModes": map[string]any{
+						"type":     "array",
+						"maxItems": maxListItems,
+						"items": map[string]any{
+							"type":      "string",
+							"minLength": 1,
+							"maxLength": maxStringBytes / utf8.UTFMax,
+						},
+					},
+					"historyLength": map[string]any{
+						"type":    "integer",
+						"minimum": 0,
+						"maximum": maxListItems,
+					},
+				},
+			},
+			"metadata": map[string]any{"type": "object"},
+		},
+	}
 }
 
 type sendConfiguration struct {
@@ -128,11 +213,8 @@ func parseInvokeInput(data json.RawMessage) (invokeInput, error) {
 			return invokeInput{}, ErrInvalidInput
 		}
 	}
-	if len(input.Metadata) != 0 {
-		var metadata map[string]any
-		if len(input.Metadata) > 1<<20 || json.Unmarshal(input.Metadata, &metadata) != nil || metadata == nil {
-			return invokeInput{}, ErrInvalidInput
-		}
+	if len(input.Metadata) != 0 && !validJSONObject(input.Metadata) {
+		return invokeInput{}, ErrInvalidInput
 	}
 	return input, nil
 }
@@ -208,10 +290,6 @@ func (a *Adapter) cachedOrResolve(ctx context.Context, p provider.Provider) (res
 	return resolved, err
 }
 
-func tokenEnvironmentName(providerName string) string {
-	return "NINEA_A2A_TOKEN_" + strings.ToUpper(strings.ReplaceAll(providerName, "-", "_"))
-}
-
 func (a *Adapter) operationJSON(ctx context.Context, p provider.Provider, bearer bool, method, endpoint string, requestBody any) ([]byte, error) {
 	var body io.Reader
 	if requestBody != nil {
@@ -235,10 +313,16 @@ func (a *Adapter) operationJSON(ctx context.Context, p provider.Provider, bearer
 	}
 	request.Header.Set("Accept", "application/a2a+json")
 	request.Header.Set("A2A-Version", protocolVersion)
-	if token := os.Getenv(tokenEnvironmentName(p.Name)); bearer && token != "" {
+	if bearer {
+		reference := p.Config["credential_reference"]
+		if reference == "" || a.resolver == nil {
+			return nil, &secret.MissingError{Reference: reference}
+		}
+		token, resolveErr := a.resolver.Resolve(secret.WithWorkspace(ctx, p.Config["workspace_root"]), reference)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 		request.Header.Set("Authorization", "Bearer "+token)
-	} else if bearer {
-		return nil, adapterError("auth_required", "A2A bearer token is required")
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
@@ -247,9 +331,12 @@ func (a *Adapter) operationJSON(ctx context.Context, p provider.Provider, bearer
 		}
 		return nil, adapterError("a2a_unavailable", "A2A operation endpoint is unavailable")
 	}
-	defer response.Body.Close()
 	responseBody, err := readBoundedJSON(response, "application/a2a+json")
+	closeErr := response.Body.Close()
 	if err != nil {
+		return nil, adapterError("invalid_response", "A2A operation returned an invalid response")
+	}
+	if closeErr != nil {
 		return nil, adapterError("invalid_response", "A2A operation returned an invalid response")
 	}
 	return responseBody, nil

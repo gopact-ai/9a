@@ -8,61 +8,44 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gopact-ai/9a/internal/authz"
 	"github.com/gopact-ai/9a/internal/call"
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/provider"
-	executableprovider "github.com/gopact-ai/9a/internal/provider/executable"
 )
 
 type asyncTestAdapter struct {
-	cancelable bool
-	blocking   bool
-	started    chan struct{}
-	allowStart chan struct{}
-	canceled   chan struct{}
-	cancelSeen chan struct{}
-	invokeErr  error
-	cancelErr  error
-	once       sync.Once
-}
-
-type gatedExecutableAdapter struct {
-	provider.Adapter
-	entered    chan struct{}
-	release    chan struct{}
-	cancelSeen chan struct{}
-}
-
-func (a *gatedExecutableAdapter) Invoke(ctx context.Context, p provider.Provider, c capability.Capability, id string, input json.RawMessage, sink provider.Sink) error {
-	close(a.entered)
-	select {
-	case <-a.release:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return a.Adapter.Invoke(ctx, p, c, id, input, sink)
-}
-
-func (a *gatedExecutableAdapter) Cancel(ctx context.Context, p provider.Provider, id string) error {
-	select {
-	case <-a.cancelSeen:
-	default:
-		close(a.cancelSeen)
-	}
-	return a.Adapter.Cancel(ctx, p, id)
+	cancelable       bool
+	blocking         bool
+	started          chan struct{}
+	allowStart       chan struct{}
+	canceled         chan struct{}
+	cancelSeen       chan struct{}
+	invokeErr        error
+	cancelErr        error
+	inputSchema      map[string]any
+	outputSchema     map[string]any
+	result           json.RawMessage
+	requiresApproval bool
+	once             sync.Once
 }
 
 func (a *asyncTestAdapter) Discover(_ context.Context, p provider.Provider) ([]capability.Capability, error) {
+	approval := "never"
+	if a.requiresApproval {
+		approval = "always"
+	}
 	return []capability.Capability{{
 		ID: p.Protocol + "/" + p.Name + "/async", Kind: "api.operation", Name: "Async", Description: "Async operation",
-		Source: capability.Source{Protocol: p.Protocol, Provider: p.Name, UpstreamName: "async"},
-		Input:  capability.Contract{Mode: "json"}, Output: capability.Contract{Mode: "json"},
+		Source:    capability.Source{Protocol: p.Protocol, Provider: p.Name, UpstreamName: "async"},
+		Input:     capability.Contract{Mode: "json", JSONSchema: a.inputSchema},
+		Output:    capability.Contract{Mode: "json", JSONSchema: a.outputSchema},
 		Lifecycle: capability.Lifecycle{Sync: true, Streaming: true, Cancelable: a.cancelable},
+		Security:  capability.Security{RequiresApproval: approval},
 	}}, nil
 }
 
@@ -98,13 +81,17 @@ func (a *asyncTestAdapter) Invoke(ctx context.Context, _ provider.Provider, _ ca
 	if err := sink.Artifact("report.txt", "text/plain", []byte("artifact")); err != nil {
 		return err
 	}
-	return sink.Event(provider.Event{Type: "result", Data: json.RawMessage(`{"ok":true}`)})
+	result := a.result
+	if result == nil {
+		result = json.RawMessage(`{"ok":true}`)
+	}
+	return sink.Event(provider.Event{Type: "result", Data: result})
 }
 
 func TestZeroValueAdapterErrorFromInvokeBecomesInternalError(t *testing.T) {
 	adapter := &asyncTestAdapter{cancelable: true, allowStart: make(chan struct{}), canceled: make(chan struct{}), invokeErr: &provider.AdapterError{}}
 	a, _, capabilityID := setupAsyncApp(t, adapter)
-	id, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
+	id, err := a.startCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +105,7 @@ func TestZeroValueAdapterErrorFromInvokeBecomesInternalError(t *testing.T) {
 	}
 	<-runtime.done
 	adapter.invokeErr = nil
-	nextID, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
+	nextID, err := a.startCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +115,7 @@ func TestZeroValueAdapterErrorFromInvokeBecomesInternalError(t *testing.T) {
 func TestAggregateEventBudgetFailureUsesEventLimitTerminalCode(t *testing.T) {
 	adapter := &asyncTestAdapter{cancelable: true, canceled: make(chan struct{}), invokeErr: call.ErrEventBudgetExceeded}
 	a, _, capabilityID := setupAsyncApp(t, adapter)
-	id, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
+	id, err := a.startCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +133,7 @@ func TestTypedNilAdapterErrorFromInvokeHelper(t *testing.T) {
 	var invokeErr error = typedNil
 	adapter := &asyncTestAdapter{cancelable: true, allowStart: make(chan struct{}), canceled: make(chan struct{}), invokeErr: invokeErr}
 	a, _, capabilityID := setupAsyncApp(t, adapter)
-	id, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
+	id, err := a.startCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +147,7 @@ func TestTypedNilAdapterErrorFromInvokeHelper(t *testing.T) {
 	}
 	<-runtime.done
 	adapter.invokeErr = nil
-	nextID, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
+	nextID, err := a.startCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,121 +185,6 @@ func (a *asyncTestAdapter) Cancel(context.Context, provider.Provider, string) er
 	return nil
 }
 
-func TestInvalidAdapterErrorsFromCancelReturnStableFailure(t *testing.T) {
-	var typedNil *provider.AdapterError
-	for name, cancelErr := range map[string]error{
-		"zero value": &provider.AdapterError{},
-		"typed nil":  typedNil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			adapter := &asyncTestAdapter{cancelable: true, blocking: true, started: make(chan struct{}), canceled: make(chan struct{}), cancelErr: cancelErr}
-			a, _, capabilityID := setupAsyncApp(t, adapter)
-			id, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{}`))
-			if err != nil {
-				t.Fatal(err)
-			}
-			<-adapter.started
-			if err := a.CancelCall(context.Background(), "owner", id); err == nil || err.Error() != "adapter cancellation failed" {
-				t.Fatalf("CancelCall error=%T %v", err, err)
-			}
-			adapter.cancelErr = nil
-			if err := a.CancelCall(context.Background(), "owner", id); err != nil {
-				t.Fatalf("subsequent CancelCall error=%v", err)
-			}
-			_ = waitCallState(t, a, "owner", id, call.Canceled)
-		})
-	}
-}
-
-func TestCancelWaitsForInvocationReadiness(t *testing.T) {
-	ctx := context.Background()
-	adapter := &asyncTestAdapter{
-		cancelable: true,
-		blocking:   true,
-		started:    make(chan struct{}),
-		allowStart: make(chan struct{}),
-		canceled:   make(chan struct{}),
-		cancelSeen: make(chan struct{}),
-	}
-	a, _, capabilityID := setupAsyncApp(t, adapter)
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-adapter.started
-	cancelDone := make(chan error, 1)
-	go func() { cancelDone <- a.CancelCall(ctx, "owner", id) }()
-	waitAppLeaseCount(t, a, 2)
-	select {
-	case err := <-cancelDone:
-		t.Fatalf("CancelCall returned before readiness: %v", err)
-	case <-adapter.cancelSeen:
-		t.Fatal("adapter Cancel called before readiness")
-	default:
-	}
-	close(adapter.allowStart)
-	if err := <-cancelDone; err != nil {
-		t.Fatalf("CancelCall after readiness: %v", err)
-	}
-	select {
-	case <-adapter.cancelSeen:
-	default:
-		t.Fatal("adapter Cancel was not called after readiness")
-	}
-	record := waitCallState(t, a, "owner", id, call.Canceled)
-	if record.Call.Code != "canceled" {
-		t.Fatalf("record=%#v", record)
-	}
-}
-
-func TestImmediateCancelWaitsForRealExecutablePendingRegistration(t *testing.T) {
-	fixture := filepath.Join(t.TempDir(), "execfixture")
-	build := exec.Command("go", "build", "-o", fixture, "../../testdata/executableadapter")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build executable fixture: %v\n%s", err, output)
-	}
-	external, err := executableprovider.New("exec", fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gated := &gatedExecutableAdapter{Adapter: external, entered: make(chan struct{}), release: make(chan struct{}), cancelSeen: make(chan struct{})}
-	a, _ := testApp(t)
-	t.Cleanup(func() { _ = a.Close(context.Background()) })
-	a.mu.Lock()
-	a.adapters["exec"] = gated
-	a.mu.Unlock()
-	p := provider.Provider{ID: "exec/demo", Protocol: "exec", Name: "demo", Endpoint: "local"}
-	if err := a.AddProvider(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	capabilityID := "exec/demo/async"
-	if err := a.Grant(context.Background(), "owner", capabilityID, []string{"invoke"}); err != nil {
-		t.Fatal(err)
-	}
-	id, err := a.StartCall(context.Background(), "owner", capabilityID, json.RawMessage(`{"block":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-gated.entered
-	cancelDone := make(chan error, 1)
-	go func() { cancelDone <- a.CancelCall(context.Background(), "owner", id) }()
-	waitAppLeaseCount(t, a, 2)
-	select {
-	case err := <-cancelDone:
-		t.Fatalf("CancelCall returned before external pending registration: %v", err)
-	case <-gated.cancelSeen:
-		t.Fatal("external Cancel called before pending registration")
-	default:
-	}
-	close(gated.release)
-	if err := <-cancelDone; err != nil {
-		t.Fatalf("CancelCall after external pending registration: %v", err)
-	}
-	record := waitCallState(t, a, "owner", id, call.Canceled)
-	if record.Call.Code != "canceled" {
-		t.Fatalf("record=%#v", record)
-	}
-}
 func (*asyncTestAdapter) Health(context.Context, provider.Provider) provider.Health {
 	return provider.Health{Healthy: true}
 }
@@ -325,15 +197,75 @@ func setupAsyncApp(t *testing.T, adapter *asyncTestAdapter) (*App, provider.Prov
 	a.mu.Lock()
 	a.adapters["async"] = adapter
 	a.mu.Unlock()
-	p := provider.Provider{ID: "async/demo", Protocol: "async", Name: "demo", Endpoint: "local"}
-	if err := a.AddProvider(context.Background(), p); err != nil {
+	root, err := canonicalWorkspaceRoot(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	capabilityID := "async/demo/async"
-	if err := a.Grant(context.Background(), "owner", capabilityID, []string{"invoke"}); err != nil {
+	p := provider.Provider{ID: "async/ws-0000000000000000/demo", Protocol: "async", Name: "demo", Endpoint: "local", Config: map[string]string{"workspace_root": root}}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities = scopeIntegrationCapabilities(p, capabilities)
+	if _, err := a.cat.ReplaceProviderCapabilities(context.Background(), p, capabilities); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.providers[p.ID] = p
+	a.mu.Unlock()
+	capabilityID := p.ID + "/async"
+	if _, err := a.az.GrantIfAbsent(context.Background(), "owner", capabilityID, authz.Invoke); err != nil {
 		t.Fatal(err)
 	}
 	return a, p, capabilityID
+}
+
+func TestLongCallDoesNotBlockChangesToAnotherIntegration(t *testing.T) {
+	adapter := &asyncTestAdapter{cancelable: true, blocking: true, started: make(chan struct{}), canceled: make(chan struct{})}
+	a, _, capabilityID := setupAsyncApp(t, adapter)
+	callCtx, cancelCall := context.WithCancel(context.Background())
+	id, err := a.startCall(callCtx, "owner", capabilityID, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-adapter.started
+	if err := a.Bootstrap(context.Background(), "root-token"); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	cleanupReadOnlyProjection(t, root)
+	source := []byte(`version: 1
+name: other
+type: http
+services:
+  local:
+    baseURL: http://127.0.0.1
+capabilities:
+  ping:
+    service: local
+    method: GET
+    path: /ping
+    inputSchema:
+      type: object
+      additionalProperties: false
+    outputSchema:
+      type: object
+`)
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.Connect(context.Background(), "admin", source, root)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("another integration was blocked by a long-running call")
+	}
+	cancelCall()
+	_ = waitCallState(t, a, "owner", id, call.Canceled)
 }
 
 func appSubmittedCall(id string) call.Call {
@@ -348,7 +280,7 @@ func waitCallState(t *testing.T, a *App, identity, id string, terminal ...call.S
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		record, err := a.GetCall(context.Background(), identity, id)
+		record, err := a.getCall(context.Background(), identity, id)
 		if err == nil && wanted[record.Call.State] {
 			return record
 		}
@@ -359,27 +291,11 @@ func waitCallState(t *testing.T, a *App, identity, id string, terminal ...call.S
 	}
 }
 
-func waitAppLeaseCount(t *testing.T, a *App, want int) {
-	t.Helper()
-	for deadline := time.Now().Add(3 * time.Second); ; {
-		a.mu.Lock()
-		count := len(a.leases)
-		a.mu.Unlock()
-		if count >= want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("operation lease count=%d, want at least %d", count, want)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 func TestStartCallPersistsInputEventsArtifactsAndResult(t *testing.T) {
 	ctx := context.Background()
 	a, _, capabilityID := setupAsyncApp(t, &asyncTestAdapter{cancelable: true, canceled: make(chan struct{})})
 	input := json.RawMessage(`{"provider_sensitive":"value"}`)
-	id, err := a.StartCall(ctx, "owner", capabilityID, input)
+	id, err := a.startCall(ctx, "owner", capabilityID, input)
 	if err != nil || id == "" {
 		t.Fatalf("StartCall() id=%q err=%v", id, err)
 	}
@@ -391,7 +307,7 @@ func TestStartCallPersistsInputEventsArtifactsAndResult(t *testing.T) {
 	if string(record.Result) != `{"ok":true}` || record.Call.IdentityID != "owner" {
 		t.Fatalf("record=%#v", record)
 	}
-	events, err := a.ListCallEvents(ctx, "owner", id)
+	events, err := a.callDB.ListEvents(ctx, id, call.MaxEventPageSize)
 	if err != nil || len(events) != 3 {
 		t.Fatalf("events=%#v err=%v", events, err)
 	}
@@ -434,64 +350,40 @@ func stringsJoin(values []string) string {
 	return out
 }
 
-func TestCancelCallAndOwnershipAreNonDisclosing(t *testing.T) {
+func TestCallOwnershipIsNonDisclosing(t *testing.T) {
 	ctx := context.Background()
-	adapter := &asyncTestAdapter{cancelable: true, blocking: true, started: make(chan struct{}), canceled: make(chan struct{})}
+	adapter := &asyncTestAdapter{cancelable: true, canceled: make(chan struct{})}
 	a, _, capabilityID := setupAsyncApp(t, adapter)
 	if err := a.Bootstrap(ctx, "root-token"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
+	id, err := a.startCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-adapter.started
-	if _, err := a.GetCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
+	_ = waitCallState(t, a, "owner", id, call.Completed)
+	if _, err := a.getCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
 		t.Fatalf("other GetCall error=%v", err)
 	}
-	if _, err := a.ListCallEvents(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
-		t.Fatalf("other ListCallEvents error=%v", err)
-	}
-	if err := a.CancelCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
-		t.Fatalf("other CancelCall error=%v", err)
-	}
-	if _, err := a.GetCall(ctx, "admin", id); err != nil {
+	if _, err := a.getCall(ctx, "admin", id); err != nil {
 		t.Fatalf("admin GetCall error=%v", err)
-	}
-	if _, err := a.ListCallEventPage(ctx, "admin", id, 0, 1); err != nil {
-		t.Fatalf("admin ListCallEventPage error=%v", err)
-	}
-	if err := a.CancelCall(ctx, "owner", id); err != nil {
-		t.Fatalf("CancelCall: %v", err)
-	}
-	record := waitCallState(t, a, "owner", id, call.Canceled)
-	if record.Call.Code != "canceled" {
-		t.Fatalf("canceled record=%#v", record)
-	}
-	if err := a.CancelCall(ctx, "owner", id); !errors.Is(err, ErrCallNotActive) {
-		t.Fatalf("second CancelCall error=%v", err)
 	}
 }
 
-func TestStartCallValidationAndNotCancelable(t *testing.T) {
+func TestStartCallValidation(t *testing.T) {
 	ctx := context.Background()
-	adapter := &asyncTestAdapter{blocking: true, started: make(chan struct{}), canceled: make(chan struct{})}
+	adapter := &asyncTestAdapter{canceled: make(chan struct{})}
 	a, _, capabilityID := setupAsyncApp(t, adapter)
-	if _, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`not-json`)); err == nil {
+	if _, err := a.startCall(ctx, "owner", capabilityID, json.RawMessage(`not-json`)); err == nil {
 		t.Fatal("StartCall accepted invalid JSON")
 	}
 	oversized := append([]byte{'"'}, bytes.Repeat([]byte{'x'}, call.MaxPayloadBytes)...)
 	oversized = append(oversized, '"')
-	if _, err := a.StartCall(ctx, "owner", capabilityID, oversized); !errors.Is(err, call.ErrPayloadTooLarge) {
+	if _, err := a.startCall(ctx, "owner", capabilityID, oversized); !errors.Is(err, call.ErrPayloadTooLarge) {
 		t.Fatalf("oversized StartCall error=%v", err)
 	}
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
-	if err != nil {
+	if _, err := a.startCall(ctx, "owner", capabilityID, json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
-	}
-	<-adapter.started
-	if err := a.CancelCall(ctx, "owner", id); !errors.Is(err, ErrCallNotCancelable) {
-		t.Fatalf("CancelCall error=%v", err)
 	}
 }
 
@@ -569,7 +461,7 @@ func TestCompletePersistenceFailureFallsBackToInternalError(t *testing.T) {
 	if _, err := a.db.ExecContext(ctx, `CREATE TRIGGER reject_completed_call BEFORE UPDATE OF state ON calls WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL,'reject completed state'); END`); err != nil {
 		t.Fatal(err)
 	}
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
+	id, err := a.startCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +477,7 @@ func TestUnrecoverableTerminalPersistenceErrorIsRetainedWithoutBlockingShutdown(
 	if _, err := a.db.ExecContext(ctx, `CREATE TRIGGER reject_all_terminal_calls BEFORE UPDATE OF state ON calls WHEN NEW.state IN ('completed','failed','canceled','rejected') BEGIN SELECT RAISE(FAIL,'reject every terminal state'); END`); err != nil {
 		t.Fatal(err)
 	}
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
+	id, err := a.startCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,14 +488,11 @@ func TestUnrecoverableTerminalPersistenceErrorIsRetainedWithoutBlockingShutdown(
 		t.Fatal("runtime missing immediately after StartCall")
 	}
 	<-runtime.done
-	if _, err := a.GetCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
+	if _, err := a.getCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
 		t.Fatalf("unauthorized GetCall error=%v", err)
 	}
-	if _, err := a.GetCall(ctx, "owner", id); err == nil || err.Error() != "call terminal state persistence failed" {
+	if _, err := a.getCall(ctx, "owner", id); err == nil || err.Error() != "call terminal state persistence failed" {
 		t.Fatalf("GetCall terminal persistence error=%v", err)
-	}
-	if err := a.CancelCall(ctx, "owner", id); err == nil || err.Error() != "call terminal state persistence failed" {
-		t.Fatalf("CancelCall terminal persistence error=%v", err)
 	}
 	record, err := a.callDB.Get(ctx, id)
 	if err != nil || record.Call.State != call.Working {
@@ -641,79 +530,5 @@ func TestRuntimePersistenceErrorRetentionIsBounded(t *testing.T) {
 	}
 	if _, exists := a.callErrors[fmt.Sprintf("call-error-%d", maxRuntimeCallErrors+9)]; !exists {
 		t.Fatal("newest runtime error was not retained")
-	}
-}
-
-func TestCancelReportsTerminalPersistenceFailureAfterWorkerDone(t *testing.T) {
-	ctx := context.Background()
-	adapter := &asyncTestAdapter{cancelable: true, blocking: true, started: make(chan struct{}), canceled: make(chan struct{})}
-	a, _, capabilityID := setupAsyncApp(t, adapter)
-	if err := a.Bootstrap(ctx, "root-token"); err != nil {
-		t.Fatal(err)
-	}
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-adapter.started
-	if _, err := a.db.ExecContext(ctx, `CREATE TRIGGER reject_cancel_terminal BEFORE UPDATE OF state ON calls WHEN NEW.state IN ('canceled','failed') BEGIN SELECT RAISE(FAIL,'reject cancel terminal state'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.CancelCall(ctx, "owner", id); !errors.Is(err, ErrCallPersistence) {
-		t.Fatalf("CancelCall error=%v", err)
-	}
-	if _, err := a.GetCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
-		t.Fatalf("other GetCall error=%v", err)
-	}
-	for _, identity := range []string{"owner", "admin"} {
-		if _, err := a.GetCall(ctx, identity, id); !errors.Is(err, ErrCallPersistence) {
-			t.Fatalf("%s GetCall error=%v", identity, err)
-		}
-		if err := a.CancelCall(ctx, identity, id); !errors.Is(err, ErrCallPersistence) {
-			t.Fatalf("%s subsequent CancelCall error=%v", identity, err)
-		}
-	}
-	closeCtx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	if err := a.Close(closeCtx); err != nil {
-		t.Fatalf("Close after cancel persistence failure: %v", err)
-	}
-}
-
-func TestCancelPersistencePublicationWinsBeforeRuntimeSnapshot(t *testing.T) {
-	ctx := context.Background()
-	adapter := &asyncTestAdapter{cancelable: true, blocking: true, started: make(chan struct{}), canceled: make(chan struct{})}
-	a, _, capabilityID := setupAsyncApp(t, adapter)
-	id, err := a.StartCall(ctx, "owner", capabilityID, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-adapter.started
-	a.mu.Lock()
-	runtime := a.activeCalls[id]
-	a.mu.Unlock()
-	if runtime == nil {
-		t.Fatal("active runtime missing")
-	}
-	if _, err := a.db.ExecContext(ctx, `CREATE TRIGGER reject_interleaved_cancel_terminal BEFORE UPDATE OF state ON calls WHEN NEW.state IN ('canceled','failed') BEGIN SELECT RAISE(FAIL,'reject interleaved cancel terminal state'); END`); err != nil {
-		t.Fatal(err)
-	}
-	authorized := make(chan struct{})
-	release := make(chan struct{})
-	a.cancelBeforeRuntimeSnapshot = func() {
-		close(authorized)
-		<-release
-	}
-	cancelDone := make(chan error, 1)
-	go func() { cancelDone <- a.CancelCall(ctx, "owner", id) }()
-	<-authorized
-	close(adapter.canceled)
-	<-runtime.done
-	close(release)
-	if err := <-cancelDone; !errors.Is(err, ErrCallPersistence) {
-		t.Fatalf("CancelCall error=%v", err)
-	}
-	if _, err := a.GetCall(ctx, "other", id); !errors.Is(err, ErrCallNotFound) {
-		t.Fatalf("unauthorized GetCall error=%v", err)
 	}
 }

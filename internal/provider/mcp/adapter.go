@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,8 @@ import (
 
 	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/capability"
+	"github.com/gopact-ai/9a/internal/jsoncontract"
+	"github.com/gopact-ai/9a/internal/jsonvalue"
 	"github.com/gopact-ai/9a/internal/processgroup"
 	"github.com/gopact-ai/9a/internal/provider"
 )
@@ -42,7 +45,10 @@ const (
 	processStopTimeout   = 5 * time.Second
 )
 
-var errUnterminatedMCPResponse = errors.New("MCP response is missing a newline terminator")
+var (
+	errUnterminatedMCPResponse = errors.New("MCP response is missing a newline terminator")
+	errInvalidMCPToolResult    = errors.New("mcp tool returned an invalid result")
+)
 
 type discoveryBudget struct {
 	bytes, tools int
@@ -104,13 +110,27 @@ type session struct {
 
 func startSession(ctx context.Context, p provider.Provider) (*session, error) {
 	if !strings.HasPrefix(p.Endpoint, "stdio:") {
-		return nil, errors.New("mcp endpoint must use stdio:")
+		return nil, errors.New("mcp endpoint must use stdio")
 	}
 	executable, err := adapterreg.ValidateExecutable(strings.TrimPrefix(p.Endpoint, "stdio:"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid MCP executable: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, executable)
+	if root := p.Config["workspace_root"]; root != "" {
+		if !filepath.IsAbs(root) {
+			return nil, errors.New("invalid MCP workspace root")
+		}
+		canonical, resolveErr := filepath.EvalSymlinks(root)
+		if resolveErr != nil {
+			return nil, errors.New("invalid MCP workspace root")
+		}
+		info, statErr := os.Stat(canonical)
+		if statErr != nil || !info.IsDir() {
+			return nil, errors.New("invalid MCP workspace root")
+		}
+		cmd.Dir = canonical
+	}
 	processgroup.Configure(cmd)
 	cmd.Cancel = func() error {
 		if err := processgroup.Kill(cmd); err != nil && !errors.Is(err, os.ErrProcessDone) {
@@ -322,17 +342,19 @@ func (a *Adapter) Discover(ctx context.Context, p provider.Provider) ([]capabili
 		a.release(s)
 		_ = s.stop(context.Background())
 	}()
-	var v struct {
-		Tools *[]struct {
-			Name, Description string
-			InputSchema       map[string]any `json:"inputSchema"`
-		} `json:"tools"`
-		NextCursor string `json:"nextCursor"`
-	}
-	var tools []struct {
+	type discoveredTool struct {
 		Name, Description string
 		InputSchema       map[string]any `json:"inputSchema"`
+		OutputSchema      map[string]any `json:"outputSchema"`
+		Annotations       struct {
+			ReadOnlyHint bool `json:"readOnlyHint"`
+		} `json:"annotations"`
 	}
+	var v struct {
+		Tools      *[]discoveredTool `json:"tools"`
+		NextCursor string            `json:"nextCursor"`
+	}
+	var tools []discoveredTool
 	cursor := ""
 	var budget discoveryBudget
 	for page := 0; page < 1000; page++ {
@@ -346,7 +368,7 @@ func (a *Adapter) Discover(ctx context.Context, p provider.Provider) ([]capabili
 		}
 		v.Tools = nil
 		v.NextCursor = ""
-		if e = json.Unmarshal(raw, &v); e != nil {
+		if e = jsonvalue.Decode(raw, &v); e != nil {
 			return nil, e
 		}
 		if v.Tools == nil {
@@ -364,10 +386,46 @@ func (a *Adapter) Discover(ctx context.Context, p provider.Provider) ([]capabili
 			return nil, errors.New("mcp tools pagination exceeded 1000 pages")
 		}
 	}
+	if len(tools) == 0 {
+		return nil, errors.New("mcp tools/list returned no tools")
+	}
 	out := make([]capability.Capability, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
 	for _, t := range tools {
+		name := capability.Slug(t.Name)
+		if name == "" {
+			return nil, errors.New("mcp tool name must be a canonical non-empty slug")
+		}
+		id := capability.StableID("mcp", p.Name, t.Name)
+		if _, exists := seen[id]; exists {
+			return nil, fmt.Errorf("mcp tool names collide after normalization: %q", name)
+		}
+		seen[id] = struct{}{}
+		if t.InputSchema == nil {
+			return nil, fmt.Errorf("mcp tool %q input schema is required", t.Name)
+		}
+		if err := jsoncontract.Compile(t.InputSchema); err != nil {
+			return nil, fmt.Errorf("mcp tool %q input schema: %w", t.Name, err)
+		}
+		outputSchema := map[string]any{}
+		if t.OutputSchema != nil {
+			if err := jsoncontract.Compile(t.OutputSchema); err != nil {
+				return nil, fmt.Errorf("mcp tool %q output schema: %w", t.Name, err)
+			}
+			outputSchema = map[string]any{
+				"type":     "object",
+				"required": []any{"structuredContent"},
+				"properties": map[string]any{
+					"structuredContent": t.OutputSchema,
+				},
+			}
+		}
 		meta, _ := json.Marshal(t)
-		out = append(out, capability.Capability{ID: capability.StableID("mcp", p.Name, t.Name), Kind: "mcp.tool", Name: capability.Slug(t.Name), Description: t.Description, Source: capability.Source{Protocol: "mcp", Provider: p.Name, UpstreamName: t.Name}, Input: capability.Contract{Mode: "json", JSONSchema: t.InputSchema}, Output: capability.Contract{Mode: "mcp.toolResult"}, Lifecycle: capability.Lifecycle{Sync: true, Cancelable: true}, Security: capability.Security{UpstreamAuth: "provider-configured"}, RawMetadata: meta})
+		description := t.Description
+		if description == "" {
+			description = t.Name
+		}
+		out = append(out, capability.Capability{ID: id, Kind: "mcp.tool", Name: name, Description: description, Source: capability.Source{Protocol: "mcp", Provider: p.Name, UpstreamName: t.Name}, Input: capability.Contract{Mode: "json", JSONSchema: t.InputSchema}, Output: capability.Contract{Mode: "mcp.toolResult", JSONSchema: outputSchema}, Lifecycle: capability.Lifecycle{Sync: true, Cancelable: true}, Security: capability.Security{RequiresApproval: "always", UpstreamAuth: "provider-configured"}, RawMetadata: meta})
 	}
 	return out, nil
 }
@@ -381,7 +439,7 @@ func (a *Adapter) Invoke(ctx context.Context, p provider.Provider, c capability.
 		_ = s.stop(context.Background())
 	}()
 	var args any
-	if e = json.Unmarshal(input, &args); e != nil {
+	if e = jsonvalue.Decode(input, &args); e != nil {
 		return e
 	}
 	raw, e := s.callStarted("tools/call", map[string]any{"name": c.Source.UpstreamName, "arguments": args}, sink.Started)
@@ -395,8 +453,85 @@ func (a *Adapter) Invoke(ctx context.Context, p provider.Provider, c capability.
 		}
 		return e
 	}
+	isError, err := parseCallToolResult(raw)
+	if err != nil {
+		return err
+	}
+	if isError {
+		adapterErr, _ := provider.NewAdapterError("tool_error", "MCP tool reported an execution error")
+		return adapterErr
+	}
+	if len(c.Output.JSONSchema) != 0 {
+		if err := jsoncontract.Validate(c.Output.JSONSchema, raw); err != nil {
+			return errInvalidMCPToolResult
+		}
+	}
 	return sink.Event(provider.Event{Type: "result", Data: raw})
 }
+
+func parseCallToolResult(raw json.RawMessage) (bool, error) {
+	var result struct {
+		Content           *[]json.RawMessage `json:"content"`
+		StructuredContent json.RawMessage    `json:"structuredContent"`
+		IsError           json.RawMessage    `json:"isError"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || result.Content == nil {
+		return false, errInvalidMCPToolResult
+	}
+	for _, content := range *result.Content {
+		if !isContentBlock(content) {
+			return false, errInvalidMCPToolResult
+		}
+	}
+	if result.StructuredContent != nil && !isJSONObject(result.StructuredContent) {
+		return false, errInvalidMCPToolResult
+	}
+	isError := false
+	if result.IsError != nil {
+		if bytes.Equal(bytes.TrimSpace(result.IsError), []byte("null")) || json.Unmarshal(result.IsError, &isError) != nil {
+			return false, errInvalidMCPToolResult
+		}
+	}
+	return isError, nil
+}
+
+func isContentBlock(raw json.RawMessage) bool {
+	var content struct {
+		Type     string          `json:"type"`
+		Text     *string         `json:"text"`
+		Data     *string         `json:"data"`
+		MIMEType *string         `json:"mimeType"`
+		Name     *string         `json:"name"`
+		URI      *string         `json:"uri"`
+		Resource json.RawMessage `json:"resource"`
+	}
+	if json.Unmarshal(raw, &content) != nil {
+		return false
+	}
+	switch content.Type {
+	case "text":
+		return content.Text != nil
+	case "image", "audio":
+		return content.Data != nil && content.MIMEType != nil
+	case "resource_link":
+		return content.Name != nil && content.URI != nil
+	case "resource":
+		var resource struct {
+			URI  *string `json:"uri"`
+			Text *string `json:"text"`
+			Blob *string `json:"blob"`
+		}
+		return json.Unmarshal(content.Resource, &resource) == nil && resource.URI != nil && (resource.Text != nil) != (resource.Blob != nil)
+	default:
+		return false
+	}
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && object != nil
+}
+
 func (a *Adapter) Cancel(ctx context.Context, p provider.Provider, invocationID string) error {
 	a.mu.Lock()
 	s := a.invocations[invocationID]
@@ -434,13 +569,22 @@ func (a *Adapter) Close(ctx context.Context, p provider.Provider) error {
 }
 
 func safeEnvironment(values []string) []string {
+	allowed := map[string]struct{}{
+		"PATH": {}, "HOME": {}, "USER": {}, "LOGNAME": {},
+		"TMPDIR": {}, "TMP": {}, "TEMP": {},
+		"LANG": {}, "LC_ALL": {}, "LC_CTYPE": {},
+		"SSL_CERT_FILE": {}, "SSL_CERT_DIR": {},
+		"SYSTEMROOT": {}, "COMSPEC": {}, "PATHEXT": {}, "WINDIR": {},
+	}
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		key, _, _ := strings.Cut(value, "=")
-		if key == "NINEA_TOKEN" || key == "NINEA_BOOTSTRAP_TOKEN" {
+		key, _, found := strings.Cut(value, "=")
+		if !found {
 			continue
 		}
-		out = append(out, value)
+		if _, ok := allowed[strings.ToUpper(key)]; ok {
+			out = append(out, value)
+		}
 	}
 	return out
 }

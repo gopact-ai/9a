@@ -1,45 +1,47 @@
-# Integrations
+# Integration sources
 
-## MCP
+NineA accepts a strict integration manifest. When the user supplies arbitrary
+API documentation, OpenAPI, curl, or natural language, interpret it and produce
+the manifest described in `manifest.md`; do not ask the user to translate it.
+Before this gateway exists in a fresh workspace, load the identical embedded
+contract with `9a connect --guide http --json`.
 
-Use an absolute executable path for a local stdio server:
+The editable source lives at:
 
-```sh
-9a providers add mcp weather "stdio:/absolute/path/to/mcp-server"
-9a search "weather"
-9a project add mcp/weather/get-weather .agents/skills
+```text
+<workspace>/.9a/integrations/<name>.yaml
 ```
 
-## A2A
+Run `9a connect` after creating or changing it. The command is idempotent.
+Use `9a disconnect <name>` to remove runtime access while retaining the source.
+After connecting, run the printed `9a search <integration> --json` to enumerate
+the integration. Then inspect the selected capability with
+`9a search <integration>/<capability> --json` before constructing input.
 
-Start `9a daemon` with the provider token in
-`NINEA_A2A_TOKEN_<NORMALIZED_PROVIDER_NAME>`, then register the HTTPS endpoint:
-
-```sh
-9a providers add a2a research-agent https://agent.example.com
-9a search "research"
-```
-
-## Custom protocols
-
-Register a reviewed executable implementing `9a.adapter/v1`, then add its
-provider:
+For a single local MCP executable or a remote A2A agent, prefer the shorter
+forms; NineA creates the same canonical v1 manifest:
 
 ```sh
-9a adapters add billing /absolute/path/to/billing-adapter
-9a providers add billing production https://billing.example.com
+9a connect mcp --name local-tools -- /absolute/path/to/server
+9a connect a2a --name research-agent https://agent.example.com
 ```
 
-Remove a persisted provider and all of its managed views with:
+The A2A shortcut is for agents without bearer authentication. If the Agent Card
+requires bearer authentication, create a manifest with exactly one credential:
 
-```sh
-9a providers remove <protocol> <name>
+```yaml
+version: 1
+name: research-agent
+type: a2a
+url: https://agent.example.com
+credentials:
+  bearer:
+    secret: research-agent.bearer
 ```
 
-Create a separate token for each agent and grant only the required read and
-invoke permissions:
+Then run `9a connect <manifest.yaml>` and
+`9a secret set research-agent.bearer`. Secret values belong to the current
+workspace and must never appear in the manifest or prompt.
 
-```sh
-AGENT_TOKEN="$(9a tokens create support-agent)"
-9a acl grant support-agent <capability-id> read,invoke
-```
+Every MCP and A2A run requires an approval preflight and token. MCP
+`readOnlyHint` is descriptive metadata, not an approval bypass.

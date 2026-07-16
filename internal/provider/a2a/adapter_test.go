@@ -15,8 +15,33 @@ import (
 	"time"
 
 	"github.com/gopact-ai/9a/internal/capability"
+	"github.com/gopact-ai/9a/internal/jsoncontract"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/secret"
 )
+
+type staticResolver map[string]string
+
+func (r staticResolver) Resolve(_ context.Context, reference string) (string, error) {
+	value, ok := r[reference]
+	if !ok {
+		return "", &secret.MissingError{Reference: reference}
+	}
+	return value, nil
+}
+
+func bearerProvider(name, endpoint string) provider.Provider {
+	return provider.Provider{
+		ID:       "a2a/ws-0000000000000000/" + name,
+		Protocol: "a2a",
+		Name:     name,
+		Endpoint: endpoint,
+		Config: map[string]string{
+			"workspace_root":       "/tmp/9a-a2a-test",
+			"credential_reference": name + ".token",
+		},
+	}
+}
 
 type recordingSink struct {
 	mu        sync.Mutex
@@ -113,7 +138,7 @@ func TestCancelUsesInvocationIDAndConfirmsRemoteCancellation(t *testing.T) {
 
 	adapter := New()
 	adapter.pollInterval = time.Millisecond
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +197,7 @@ func TestCompletionClaimsTerminalBeforeBlockedResultSink(t *testing.T) {
 	defer server.Close()
 	adapter := New()
 	adapter.pollInterval = time.Millisecond
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +248,7 @@ func TestCancelClaimsTerminalWhilePollReceivesCompleted(t *testing.T) {
 			return nil, errors.New("unexpected A2A request")
 		}
 	})}
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://agent.example/a2a/v1", tenant: "tenant"}
 	invokeDone := make(chan error, 1)
 	go func() {
@@ -266,7 +291,7 @@ func TestCancelAndLocalSinkFailureHaveSingleTerminalOwner(t *testing.T) {
 			}))
 			defer server.Close()
 			adapter := New()
-			p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: server.URL}
+			p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: server.URL}
 			capabilities, err := adapter.Discover(context.Background(), p)
 			if err != nil {
 				t.Fatal(err)
@@ -342,7 +367,7 @@ func TestFinishTaskExitArbitratesRepresentativeLocalFailures(t *testing.T) {
 
 func TestCancelDeliveryFailureKeepsInvocationActive(t *testing.T) {
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://agent.example/a2a/v1", tenant: "tenant"}
 	updates := make(chan json.RawMessage, 1)
 	updates <- json.RawMessage(`{"occupied":true}`)
@@ -364,7 +389,7 @@ func TestCancelDeliveryFailureKeepsInvocationActive(t *testing.T) {
 
 func TestUpstreamCancelFailureKeepsInvocationActiveAndRetryable(t *testing.T) {
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://agent.example/a2a/v1"}
 	active := &activeTask{providerID: p.ID, taskID: "task", tenant: "tenant", cancel: func() {}, updates: make(chan json.RawMessage, 1)}
 	adapter.active["call"] = active
@@ -388,7 +413,7 @@ func TestActiveRegistryClearsForDirectAndEveryTerminalTaskState(t *testing.T) {
 	for _, state := range states {
 		t.Run(state, func(t *testing.T) {
 			adapter := New()
-			p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
+			p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
 			adapter.cache[p.ID] = resolvedProvider{baseURL: "http://agent.example/a2a/v1"}
 			body := `{"task":{"id":"terminal","contextId":"context","status":{"state":"` + state + `"}}}`
 			adapter.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -407,7 +432,7 @@ func TestActiveRegistryClearsForDirectAndEveryTerminalTaskState(t *testing.T) {
 		})
 	}
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://agent.example/a2a/v1"}
 	adapter.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/a2a+json"}}, Body: io.NopCloser(strings.NewReader(`{"message":{"messageId":"direct","contextId":"context","role":"ROLE_AGENT","parts":[{"text":"done"}]}}`))}, nil
@@ -425,7 +450,7 @@ func TestCloseCancelsAndClearsActiveTask(t *testing.T) {
 	var pollOnce sync.Once
 	adapter := New()
 	adapter.pollInterval = time.Millisecond
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://agent.example"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://agent.example/a2a/v1"}
 	adapter.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method == http.MethodPost {
@@ -461,7 +486,7 @@ func TestSixtyFifthConcurrentInvokeFailsBeforeOperationHTTP(t *testing.T) {
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
 	adapter := New()
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://127.0.0.1/a2a/v1"}
 	adapter.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		started <- struct{}{}
@@ -528,7 +553,7 @@ func TestSixtyFifthConcurrentInvokeFailsBeforeAgentCardHTTP(t *testing.T) {
 	}()
 
 	adapter := New()
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: server.URL}
 	done := make(chan error, limit)
 	for i := 0; i < limit; i++ {
 		go func(i int) {
@@ -590,7 +615,6 @@ func TestInvokeResolutionAuthAndInterfaceFailuresReleaseQuota(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("NINEA_A2A_TOKEN_RETRY_AGENT", "")
 			var mu sync.Mutex
 			discoveries := 0
 			var server *httptest.Server
@@ -618,7 +642,7 @@ func TestInvokeResolutionAuthAndInterfaceFailuresReleaseQuota(t *testing.T) {
 
 			adapter := New()
 			adapter.maxActiveInvocations = 1
-			p := provider.Provider{ID: "a2a/retry-agent", Protocol: "a2a", Name: "retry-agent", Endpoint: server.URL}
+			p := provider.Provider{ID: "a2a/ws-0000000000000000/retry-agent", Protocol: "a2a", Name: "retry-agent", Endpoint: server.URL}
 			input := json.RawMessage(`{"parts":[{"text":"work"}]}`)
 			if err := adapter.Invoke(context.Background(), p, capability.Capability{}, "failed-resolution", input, &recordingSink{}); err == nil {
 				t.Fatal("Invoke accepted invalid Agent Card")
@@ -634,7 +658,7 @@ func TestTaskLifetimeExpiresWithTypedTimeoutAndReleasesResources(t *testing.T) {
 	adapter := New()
 	adapter.pollInterval = time.Millisecond
 	adapter.taskTimeout = 15 * time.Millisecond
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://127.0.0.1/a2a/v1"}
 	adapter.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		body := `{"task":{"id":"timeout-task","status":{"state":"TASK_STATE_SUBMITTED"}}}`
@@ -663,7 +687,7 @@ func TestPollingBackoffDoublesWhenUnchangedAndResetsOnChange(t *testing.T) {
 	adapter.pollInterval = 5 * time.Millisecond
 	adapter.maxPollInterval = 20 * time.Millisecond
 	adapter.taskTimeout = time.Second
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://127.0.0.1/a2a/v1"}
 	var mu sync.Mutex
 	var polls []time.Time
@@ -704,7 +728,7 @@ func TestExplicitCancelInterruptsPollingBackoff(t *testing.T) {
 	adapter.pollInterval = 20 * time.Millisecond
 	adapter.maxPollInterval = 200 * time.Millisecond
 	adapter.taskTimeout = time.Second
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://127.0.0.1"}
 	adapter.cache[p.ID] = resolvedProvider{baseURL: "http://127.0.0.1/a2a/v1"}
 	secondPoll := make(chan struct{})
 	var polls int
@@ -800,7 +824,7 @@ func TestDiscoverSelectsHTTPJSON10AndMapsSkills(t *testing.T) {
 	defer server.Close()
 
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -815,8 +839,17 @@ func TestDiscoverSelectsHTTPJSON10AndMapsSkills(t *testing.T) {
 	if c.Input.Mode != "json" || c.Output.Mode != "a2a.response" || !c.Lifecycle.Sync || c.Lifecycle.MultiTurn || !c.Lifecycle.Cancelable || c.Lifecycle.Streaming {
 		t.Fatalf("capability contract/lifecycle=%#v", c)
 	}
-	if c.Security.UpstreamAuth != "provider-configured" || len(c.RawMetadata) == 0 {
+	if c.Output.JSONSchema == nil {
+		t.Fatal("A2A output contract did not publish an explicit schema object")
+	}
+	if c.Security.RequiresApproval != "always" || c.Security.UpstreamAuth != "none" || len(c.RawMetadata) == 0 {
 		t.Fatalf("capability security/metadata=%#v", c)
+	}
+	if err := jsoncontract.Validate(c.Input.JSONSchema, json.RawMessage(`{"parts":[{"text":"summarize"}]}`)); err != nil {
+		t.Fatalf("published input schema rejected a valid A2A request: %v", err)
+	}
+	if err := jsoncontract.Validate(c.Input.JSONSchema, json.RawMessage(`{"parts":[{}]}`)); !errors.Is(err, jsoncontract.ErrInvalidValue) {
+		t.Fatalf("published input schema accepted an empty A2A part: %v", err)
 	}
 }
 
@@ -825,7 +858,7 @@ func TestDiscoverRejectsNonCanonicalProviderNameBeforeHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
 	defer server.Close()
 	adapter := New()
-	_, err := adapter.Discover(context.Background(), provider.Provider{ID: "a2a/Bad_Name", Protocol: "a2a", Name: "Bad_Name", Endpoint: server.URL})
+	_, err := adapter.Discover(context.Background(), provider.Provider{ID: "a2a/ws-0000000000000000/Bad_Name", Protocol: "a2a", Name: "Bad_Name", Endpoint: server.URL})
 	if err == nil || requests != 0 {
 		t.Fatalf("Discover error=%v requests=%d", err, requests)
 	}
@@ -838,14 +871,13 @@ func TestDiscoverRejectsNonLoopbackCleartextBeforeHTTP(t *testing.T) {
 		requests++
 		return nil, errors.New("must not be called")
 	})}
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://agent.example"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: "http://agent.example"}
 	if _, err := adapter.Discover(context.Background(), p); err == nil || requests != 0 {
 		t.Fatalf("Discover error=%v requests=%d", err, requests)
 	}
 }
 
 func TestDiscoverRejectsCrossOriginInterfaceBeforeCacheOrOperation(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_RESEARCH_AGENT", "cross-origin-secret")
 	attackerRequests := 0
 	attacker := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		attackerRequests++
@@ -863,7 +895,7 @@ func TestDiscoverRejectsCrossOriginInterfaceBeforeCacheOrOperation(t *testing.T)
 	}))
 	defer cardServer.Close()
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: cardServer.URL}
+	p := bearerProvider("research-agent", cardServer.URL)
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err == nil || capabilities != nil || attackerRequests != 0 {
 		t.Fatalf("Discover capabilities=%#v error=%v attackerRequests=%d", capabilities, err, attackerRequests)
@@ -886,14 +918,13 @@ func TestDiscoverRejectsOversizedInterfaceURL(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	if _, err := adapter.Discover(context.Background(), p); err == nil {
 		t.Fatal("Discover accepted oversized interface URL")
 	}
 }
 
 func TestPublicCardNeverReceivesAccidentalProviderToken(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_PUBLIC_AGENT", "accidental-secret")
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.EscapedPath() {
@@ -911,14 +942,30 @@ func TestPublicCardNeverReceivesAccidentalProviderToken(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	adapter := New()
-	p := provider.Provider{ID: "a2a/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: server.URL}
+	adapter := NewWithResolver(staticResolver{"public-agent.token": "accidental-secret"})
+	p := bearerProvider("public-agent", server.URL)
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := adapter.Invoke(context.Background(), p, capabilities[0], "public-call", json.RawMessage(`{"parts":[{"text":"work"}]}`), &recordingSink{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDiscoverRejectsSkillIDWithoutPublicSlug(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		card := validCard(server.URL)
+		card["skills"].([]any)[0].(map[string]any)["id"] = "!!!"
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(card)
+	}))
+	defer server.Close()
+	adapter := New()
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/public-agent", Protocol: "a2a", Name: "public-agent", Endpoint: server.URL}
+	if capabilities, err := adapter.Discover(context.Background(), p); err == nil || capabilities != nil {
+		t.Fatalf("Discover capabilities=%#v error=%v", capabilities, err)
 	}
 }
 
@@ -946,7 +993,7 @@ func TestBearerCardRequiresProviderTokenAndRejectsUnsupportedAuth(t *testing.T) 
 			}))
 			defer server.Close()
 			adapter := New()
-			p := provider.Provider{ID: "a2a/private-agent", Protocol: "a2a", Name: "private-agent", Endpoint: server.URL}
+			p := provider.Provider{ID: "a2a/ws-0000000000000000/private-agent", Protocol: "a2a", Name: "private-agent", Endpoint: server.URL}
 			if _, err := adapter.Discover(context.Background(), p); err == nil || strings.Contains(err.Error(), "private-agent") {
 				t.Fatalf("Discover error=%v", err)
 			}
@@ -969,17 +1016,15 @@ func TestSecurityRequirementAlternativesPreferExplicitPublicAccessAndIsolateProv
 		t.Fatalf("public alternative bearer=%v error=%v", bearer, err)
 	}
 	card.SecurityRequirements = card.SecurityRequirements[:1]
-	t.Setenv("NINEA_A2A_TOKEN_FIRST_AGENT", "first-secret")
 	if bearer, err := cardBearerPolicy(card, "first-agent"); err != nil || !bearer {
 		t.Fatalf("first provider bearer=%v error=%v", bearer, err)
 	}
-	if bearer, err := cardBearerPolicy(card, "second-agent"); err == nil || bearer {
+	if bearer, err := cardBearerPolicy(card, "second-agent"); err != nil || !bearer {
 		t.Fatalf("second provider bearer=%v error=%v", bearer, err)
 	}
 }
 
 func TestBearerCardAcceptsCanonicalEmptyStringList(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_CANONICAL_AGENT", "canonical-secret")
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.EscapedPath() {
@@ -1000,8 +1045,8 @@ func TestBearerCardAcceptsCanonicalEmptyStringList(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter := New()
-	p := provider.Provider{ID: "a2a/canonical-agent", Protocol: "a2a", Name: "canonical-agent", Endpoint: server.URL}
+	adapter := NewWithResolver(staticResolver{"canonical-agent.token": "canonical-secret"})
+	p := bearerProvider("canonical-agent", server.URL)
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -1012,7 +1057,6 @@ func TestBearerCardAcceptsCanonicalEmptyStringList(t *testing.T) {
 }
 
 func TestSecurityRequirementsRejectMalformedStringListsScopesAndAND(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_PRIVATE_AGENT", "provider-secret")
 	for _, test := range []struct {
 		name         string
 		requirements []any
@@ -1042,7 +1086,7 @@ func TestSecurityRequirementsRejectMalformedStringListsScopesAndAND(t *testing.T
 			}))
 			defer server.Close()
 			adapter := New()
-			p := provider.Provider{ID: "a2a/private-agent", Protocol: "a2a", Name: "private-agent", Endpoint: server.URL}
+			p := provider.Provider{ID: "a2a/ws-0000000000000000/private-agent", Protocol: "a2a", Name: "private-agent", Endpoint: server.URL}
 			if _, err := adapter.Discover(context.Background(), p); err == nil {
 				t.Fatal("Discover accepted invalid SecurityRequirement")
 			}
@@ -1062,9 +1106,6 @@ func TestSkillSecurityRequirementsOverrideCardPolicy(t *testing.T) {
 		{name: "skill bearer overrides card public", skillBearer: true, setToken: true, wantAuthHeader: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if test.setToken {
-				t.Setenv("NINEA_A2A_TOKEN_SKILL_AGENT", "skill-secret")
-			}
 			var server *httptest.Server
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.EscapedPath() {
@@ -1095,8 +1136,11 @@ func TestSkillSecurityRequirementsOverrideCardPolicy(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			adapter := New()
-			p := provider.Provider{ID: "a2a/skill-agent", Protocol: "a2a", Name: "skill-agent", Endpoint: server.URL}
+			adapter := NewWithResolver(staticResolver{"skill-agent.token": "skill-secret"})
+			p := provider.Provider{ID: "a2a/ws-0000000000000000/skill-agent", Protocol: "a2a", Name: "skill-agent", Endpoint: server.URL}
+			if test.setToken {
+				p = bearerProvider("skill-agent", server.URL)
+			}
 			capabilities, err := adapter.Discover(context.Background(), p)
 			if err != nil {
 				t.Fatal(err)
@@ -1125,7 +1169,7 @@ func TestMixedSkillCardRejectsProviderWhenBearerSkillTokenMissing(t *testing.T) 
 	}))
 	defer server.Close()
 	adapter := New()
-	p := provider.Provider{ID: "a2a/mixed-agent", Protocol: "a2a", Name: "mixed-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/mixed-agent", Protocol: "a2a", Name: "mixed-agent", Endpoint: server.URL}
 	if capabilities, err := adapter.Discover(context.Background(), p); err == nil || capabilities != nil {
 		t.Fatalf("Discover capabilities=%#v error=%v", capabilities, err)
 	}
@@ -1147,7 +1191,7 @@ func TestDiscoveryAndOperationErrorsAreSanitizedAdapterErrors(t *testing.T) {
 	adapter.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New(sentinel)
 	})}
-	p := provider.Provider{ID: "a2a/secure-agent", Protocol: "a2a", Name: "secure-agent", Endpoint: "https://secret.internal"}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/secure-agent", Protocol: "a2a", Name: "secure-agent", Endpoint: "https://secret.internal"}
 	_, err := adapter.Discover(context.Background(), p)
 	assertSafe(t, err)
 
@@ -1184,7 +1228,6 @@ func TestDiscoveryURLUsesOnlyExplicitAgentCardPath(t *testing.T) {
 }
 
 func TestDiscoverRejectsHTTPSCardToHTTPInterfaceWithoutCredentialLeak(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_RESEARCH_AGENT", "must-not-leak")
 	operationRequests := 0
 	operation := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		operationRequests++
@@ -1206,7 +1249,7 @@ func TestDiscoverRejectsHTTPSCardToHTTPInterfaceWithoutCredentialLeak(t *testing
 	defer cardServer.Close()
 	adapter := New()
 	adapter.client = cardServer.Client()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: cardServer.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: cardServer.URL}
 	if _, err := adapter.Discover(context.Background(), p); err == nil {
 		t.Fatal("Discover accepted HTTPS AgentCard with HTTP operation interface")
 	}
@@ -1224,7 +1267,7 @@ func TestDiscoverAcceptsHTTPSCardAndHTTPSInterface(t *testing.T) {
 	defer server.Close()
 	adapter := New()
 	adapter.client = server.Client()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	if _, err := adapter.Discover(context.Background(), p); err != nil {
 		t.Fatalf("Discover rejected HTTPS interface: %v", err)
 	}
@@ -1243,7 +1286,7 @@ func TestDiscoverRejectsCollidingCapabilityIDs(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	if _, err := adapter.Discover(context.Background(), p); err == nil {
 		t.Fatal("Discover accepted colliding capability IDs")
 	}
@@ -1295,7 +1338,6 @@ func TestValidateCardRejectsMalformedAndDuplicateExtensions(t *testing.T) {
 }
 
 func TestDiscoverRejectsRequiredExtensionBeforeOperation(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_RESEARCH_AGENT", "must-not-leak")
 	operationRequests := 0
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1317,7 +1359,7 @@ func TestDiscoverRejectsRequiredExtensionBeforeOperation(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err == nil || !strings.Contains(err.Error(), "unsupported required A2A extension") || capabilities != nil {
 		t.Fatalf("Discover capabilities=%#v error=%v", capabilities, err)
@@ -1328,7 +1370,6 @@ func TestDiscoverRejectsRequiredExtensionBeforeOperation(t *testing.T) {
 }
 
 func TestOptionalExtensionIsMetadataOnlyAndSendsNoExtensionHeader(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_RESEARCH_AGENT", "provider-secret")
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.EscapedPath() {
@@ -1349,7 +1390,7 @@ func TestOptionalExtensionIsMetadataOnlyAndSendsNoExtensionHeader(t *testing.T) 
 	}))
 	defer server.Close()
 	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -1363,7 +1404,6 @@ func TestOptionalExtensionIsMetadataOnlyAndSendsNoExtensionHeader(t *testing.T) 
 }
 
 func TestInvokeDirectMessageUsesOfficialRESTShape(t *testing.T) {
-	t.Setenv("NINEA_A2A_TOKEN_RESEARCH_AGENT", "provider-secret")
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.EscapedPath() {
@@ -1400,11 +1440,14 @@ func TestInvokeDirectMessageUsesOfficialRESTShape(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter := New()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	adapter := NewWithResolver(staticResolver{"research-agent.token": "provider-secret"})
+	p := bearerProvider("research-agent", server.URL)
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if capabilities[0].Security.UpstreamAuth != "secret" {
+		t.Fatalf("upstream auth=%q", capabilities[0].Security.UpstreamAuth)
 	}
 	sink := &recordingSink{}
 	input := json.RawMessage(`{"parts":[{"text":"summarize"}],"configuration":{"acceptedOutputModes":["text/plain"]},"metadata":{"request":"safe"}}`)
@@ -1424,6 +1467,48 @@ func TestInvokeAcceptsOfficialPartOptionalFields(t *testing.T) {
 	input, err := parseInvokeInput(json.RawMessage(`{"parts":[{"text":"hello","metadata":{"source":"user"},"filename":"prompt.txt","mediaType":"text/plain"}]}`))
 	if err != nil || len(input.Parts) != 1 {
 		t.Fatalf("parseInvokeInput()=%#v, %v", input, err)
+	}
+}
+
+func TestInvokeInputSchemaMatchesParserBoundaries(t *testing.T) {
+	schema := invokeInputSchema()
+	valid := []string{
+		`{"parts":[{"text":"hello"}]}`,
+		`{"parts":[{"raw":"AA==","filename":"payload.bin","mediaType":"application/octet-stream"}]}`,
+		`{"parts":[{"url":"https://files.example/report.pdf"}]}`,
+		`{"parts":[{"data":null}],"configuration":{"acceptedOutputModes":["application/json"],"historyLength":2},"metadata":{}}`,
+	}
+	for _, input := range valid {
+		data := json.RawMessage(input)
+		if err := jsoncontract.Validate(schema, data); err != nil {
+			t.Errorf("schema rejected valid input %s: %v", input, err)
+		}
+		if _, err := parseInvokeInput(data); err != nil {
+			t.Errorf("parser rejected valid input %s: %v", input, err)
+		}
+	}
+
+	invalid := []string{
+		`{"parts":[{}]}`,
+		`{"parts":[{"text":"one","data":2}]}`,
+		`{"parts":[{"raw":"not base64"}]}`,
+		`{"parts":[{"url":"relative/path"}]}`,
+		`{"parts":[{"url":"https:///missing-host"}]}`,
+		`{"parts":[{"url":"http:relative"}]}`,
+		`{"parts":[{"url":"https://files.example/%zz"}]}`,
+		`{"parts":[{"text":"ok","filename":""}]}`,
+		`{"parts":[{"text":"ok","mediaType":"not a media type"}]}`,
+		`{"parts":[{"text":"ok","unknown":true}]}`,
+		`{"parts":[{"text":"ok"}],"configuration":{"returnImmediately":false}}`,
+	}
+	for _, input := range invalid {
+		data := json.RawMessage(input)
+		if err := jsoncontract.Validate(schema, data); !errors.Is(err, jsoncontract.ErrInvalidValue) {
+			t.Errorf("schema accepted invalid input %s: %v", input, err)
+		}
+		if _, err := parseInvokeInput(data); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("parser accepted invalid input %s: %v", input, err)
+		}
 	}
 }
 
@@ -1555,7 +1640,7 @@ func TestHealthResolvesOnMissAndCloseInvalidatesCache(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(validCard(server.URL))
 	}))
 	defer server.Close()
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	adapter := New()
 	if health := adapter.Health(context.Background(), p); !health.Healthy {
 		t.Fatalf("Health()=%#v", health)
@@ -1574,7 +1659,7 @@ func TestHealthResolvesOnMissAndCloseInvalidatesCache(t *testing.T) {
 func TestInvokeRejectsCallerReturnImmediatelyOverride(t *testing.T) {
 	adapter := New()
 	input := json.RawMessage(`{"parts":[{"text":"hello"}],"configuration":{"returnImmediately":false}}`)
-	err := adapter.Invoke(context.Background(), provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://127.0.0.1"}, capability.Capability{}, "call", input, &recordingSink{})
+	err := adapter.Invoke(context.Background(), provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: "http://127.0.0.1"}, capability.Capability{}, "call", input, &recordingSink{})
 	if err == nil || !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("Invoke error=%v", err)
 	}
@@ -1613,7 +1698,7 @@ func TestInvokePollsTaskWithOrderedDeduplicatedEvents(t *testing.T) {
 	defer server.Close()
 	adapter := New()
 	adapter.pollInterval = time.Millisecond
-	p := provider.Provider{ID: "a2a/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
+	p := provider.Provider{ID: "a2a/ws-0000000000000000/research-agent", Protocol: "a2a", Name: "research-agent", Endpoint: server.URL}
 	capabilities, err := adapter.Discover(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)

@@ -1,13 +1,43 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/provider"
 	"github.com/gopact-ai/9a/internal/store"
 )
+
+func TestCapabilitySchemaPreservesLargeIntegers(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/ninea.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := New(db)
+	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather"}
+	c := testCapability("forecast")
+	c.Input.JSONSchema = map[string]any{"const": json.Number("9007199254740993")}
+	if _, err := repo.ReplaceProviderCapabilities(ctx, p, []capability.Capability{c}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetCapability(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(got.Input.JSONSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`9007199254740993`)) {
+		t.Fatalf("persisted schema lost integer precision: %s", raw)
+	}
+}
 
 func testCapability(name string) capability.Capability {
 	return capability.Capability{
@@ -18,6 +48,48 @@ func testCapability(name string) capability.Capability {
 	}
 }
 
+func TestResolveWorkspaceCapabilityUsesShortReferenceAndRejectsAmbiguity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/ninea.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	r := New(db)
+
+	mcpCapability := testCapability("Get Weather")
+	mcpProvider := provider.Provider{ID: "mcp/ws-0000000000000000/weather", Protocol: "mcp", Name: "weather", Config: map[string]string{"workspace_root": "/work/weather"}}
+	mcpCapability.ID = mcpProvider.ID + "/get-weather"
+	if _, err := r.ReplaceProviderCapabilities(ctx, mcpProvider, []capability.Capability{mcpCapability}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := r.ResolveWorkspaceCapability(ctx, "/work/weather", "weather/get-weather")
+	if err != nil || resolved.ID != mcpCapability.ID {
+		t.Fatalf("ResolveWorkspaceCapability()=%#v, %v", resolved, err)
+	}
+	if _, err := r.ResolveWorkspaceCapability(ctx, "/work/weather", "weather/missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing ResolveWorkspaceCapability() error=%v", err)
+	}
+	if _, err := r.ResolveWorkspaceCapability(ctx, "/another/workspace", "weather/get-weather"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-workspace ResolveWorkspaceCapability() error=%v", err)
+	}
+	if _, err := r.ResolveWorkspaceCapability(ctx, "/work/weather", mcpCapability.ID); err == nil {
+		t.Fatal("ResolveWorkspaceCapability() accepted an internal capability id")
+	}
+
+	a2aCapability := mcpCapability
+	a2aCapability.ID = "a2a/ws-1111111111111111/weather/get-weather"
+	a2aCapability.Source.Protocol = "a2a"
+	a2aProvider := provider.Provider{ID: "a2a/ws-1111111111111111/weather", Protocol: "a2a", Name: "weather", Config: map[string]string{"workspace_root": "/work/weather"}}
+	if _, err := r.ReplaceProviderCapabilities(ctx, a2aProvider, []capability.Capability{a2aCapability}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ResolveWorkspaceCapability(ctx, "/work/weather", "weather/get-weather"); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("ambiguous ResolveWorkspaceCapability() error=%v", err)
+	}
+}
+
 func TestReplaceProviderCapabilitiesIsRevisionedAndAtomic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -25,7 +97,7 @@ func TestReplaceProviderCapabilitiesIsRevisionedAndAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	r := New(db)
 	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather", Endpoint: "stdio:/bin/weather"}
 	if rev, err := r.ReplaceProviderCapabilities(ctx, p, []capability.Capability{testCapability("current"), testCapability("forecast")}); err != nil || rev != 1 {
@@ -52,7 +124,7 @@ func TestReplaceRevokesOnlyRemovedCapabilityACLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	r := New(db)
 	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather"}
 	current, forecast := testCapability("current"), testCapability("forecast")
@@ -84,7 +156,7 @@ func TestReplaceRejectsInvalidCapabilityWithoutChangingRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	r := New(db)
 	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather"}
 	if _, err := r.ReplaceProviderCapabilities(ctx, p, []capability.Capability{{}}); err == nil {
@@ -102,7 +174,7 @@ func TestListProvidersRestoresPersistedRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	r := New(db)
 	p := provider.Provider{ID: "mcp/weather", Protocol: "mcp", Name: "weather", Endpoint: "stdio:/bin/weather"}
 	if _, err := r.ReplaceProviderCapabilities(ctx, p, []capability.Capability{testCapability("forecast")}); err != nil {

@@ -1,0 +1,28 @@
+version: 1
+name: private-api
+description: Read the current user from an API protected by a bearer token.
+type: http
+credentials:
+  api-token:
+    secret: private-api.api-token
+services:
+  api:
+    baseURL: https://api.example.com
+    headers:
+      Authorization: "Bearer {{ secrets.api-token }}"
+capabilities:
+  current-user:
+    description: Read the authenticated user's profile.
+    service: api
+    method: GET
+    path: /v1/me
+    inputSchema:
+      type: object
+      additionalProperties: false
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: .body
+    outputSchema:
+      type: object

@@ -1,44 +1,69 @@
 ---
 name: using-ninea
-description: Use when an AI agent needs to discover, invoke, add, connect, update, diagnose, or remove capabilities managed by 9A, including declarative YAML APIs, MCP servers, A2A agents, projected Skills, and persistent calls.
+description: Use when an agent needs to connect, find, run, inspect, or disconnect capabilities managed by NineA.
 ---
 
 # Using NineA
 
-Use the filesystem for discovery and commands for execution. Treat every
-9A-managed Skill as read-only; change its YAML or upstream provider instead of
-editing projected files.
+NineA is a local capability runtime. Search before loading details, and run a
+capability only when the user's task requires an upstream action.
 
-`9a search` also indexes user-owned `.agents/skills/<name>/SKILL.md` entries.
-Each search scans complete Skill directories in every attached workspace, so
-local additions, edits, and removals require no import command.
-
-## Choose the workflow
-
-- Find or run a capability: use `9a search`, inspect the projected schema, then
-  pipe one JSON object to its `invoke` entry.
-- Add one or more JSON APIs: read `references/declarative.md`, author YAML,
-  validate it, then use `9a add`.
-- Connect MCP, A2A, or another protocol: read `references/integrations.md`.
-- Repair, update, inspect, or remove a workspace view: read
-  `references/troubleshooting.md`.
-- Upgrade the installed software: read `references/troubleshooting.md`, explain
-  the difference between `brew upgrade` and `9a update`, and obtain user
-  approval before changing packages or restarting the daemon.
-
-Prefer projected invoke commands over constructing direct provider requests.
-Do not place credentials in YAML, prompts, command arguments, or projected
-files; provide them to `9a daemon` through its environment.
-
-## Fast path
+## Find and run
 
 ```sh
-9a status --json
-9a search "what the user needs"
-9a project add <capability-id> .agents/skills
-printf '%s\n' '<json-input>' | \
-  .agents/skills/<projected-skill>/scripts/invoke
+9a search "what the user needs" --json
+9a search <integration>/<capability> --json
+9a run <integration>/<capability> --input '<json>' --json
 ```
 
-Use `9a calls start` instead of synchronous invocation when work must outlive
-one CLI request. Never grant an agent broader ACLs than the requested task.
+Use `--input @file` for an existing request file or pipe one JSON value to
+stdin. As an agent, use `--json` for every `search` and `run`; the structured
+error fields are part of the safety contract.
+
+Reading this Skill, running `search`, and inspecting a contract have no
+upstream side effects. `run` is the execution boundary.
+
+If NineA reports `approval_required`, explain the proposed upstream action and
+ask the user to approve it. Preserve `data.approvalToken` and the exact input.
+Only after explicit approval, retry that unchanged input with
+`--approve <approvalToken>`. Never use a token from earlier or implied approval.
+The token is single-use, expires after 10 minutes, and is invalidated by a
+daemon restart. If it expires, was already used, or the input or capability
+changes, run a new preflight and ask again.
+
+On a `run` error, inspect `data.sideEffect`. `none` means no upstream request
+was sent, so follow `nextAction`. `possible` means the outcome is unknown:
+never retry automatically, inspect upstream state when possible, and tell the
+user what may have happened. `retryable` never overrides these rules.
+
+## Connect an HTTP API
+
+On a fresh workspace where this Skill has not been projected yet, the same
+embedded contract is available through `9a connect --guide http --json`. Read
+`references/manifest.md`, create an integration manifest, then run:
+
+```sh
+9a connect <manifest.yaml>
+```
+
+Treat `.9a/integrations/<name>.yaml` as the source of truth. The generated
+`.agents/skills/using-ninea` gateway is disposable and must not be edited.
+After connecting, run the integration `search --json` command printed by NineA,
+select a capability, then inspect its exact
+`<integration>/<capability>` contract before constructing input.
+
+For local MCP servers and remote A2A agents, use the shortcuts in
+`references/integrations.md`.
+
+## Remove runtime access
+
+```sh
+9a disconnect <integration>
+```
+
+This keeps the source manifest. Never place credential values in manifests,
+prompts, command arguments, or generated files. `9a secret` values are scoped
+to the current workspace.
+
+Read `references/troubleshooting.md` when a command fails. Stay within the seven
+public command groups and follow the next action printed by NineA.

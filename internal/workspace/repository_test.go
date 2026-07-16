@@ -14,9 +14,9 @@ func TestRepositoryWorkspaceAndManagedSkillLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
-	w := Workspace{ID: "ws-1", Root: "/workspace", SkillsRoot: "/workspace/.agents/skills", Policy: PolicyAuto, Backend: BackendDirectory, State: StateFallback, FallbackReason: "fuse unavailable", Format: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	w := Workspace{ID: "ws-1", Root: "/workspace", SkillsRoot: "/workspace/.agents/skills", Policy: PolicyAuto, Backend: BackendDirectory, State: StateHealthy, Format: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := repo.PutWorkspace(context.Background(), w); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestRepositoryRejectsDuplicateWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
 	for _, id := range []string{"one", "two"} {
 		err = repo.PutWorkspace(context.Background(), Workspace{ID: id, Root: "/same", SkillsRoot: "/same/.agents/skills", Policy: PolicyDirectory, Backend: BackendDirectory, State: StateHealthy, Format: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})

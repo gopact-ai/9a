@@ -30,9 +30,12 @@ npx --yes markdownlint-cli2@0.23.0 "**/*.md" \
 ```
 
 Keep changes focused, preserve default-deny authorization, and add regression
-coverage for behavior changes and bug fixes.
+coverage for behavior changes and bug fixes. Public CLI or manifest changes
+must update the [CLI reference](reference/cli.md) or
+[manifest reference](reference/manifest.md) in the same change. Do not expose
+internal runtime commands as public workflow.
 
-New upstream integrations should target the language-neutral contract in
-[Building adapters](adapters.md). Keep protocol-specific authentication,
-discovery, and result translation at the adapter boundary; the Catalog and
-generated Skills must remain protocol-neutral.
+Releases are explicit: `VERSION` is the next SemVer tag. A successful main
+build publishes only when that tag does not already exist, so ordinary merges
+do not create surprise patch releases. Change `VERSION` in the release change
+and choose the version according to its compatibility impact.

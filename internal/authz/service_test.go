@@ -14,12 +14,12 @@ func TestDefaultDenyAndSeparatePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	s := New(db)
 	if s.Allowed(ctx, "agent", "cap", Read) {
 		t.Fatal("default allow")
 	}
-	if err := s.Grant(ctx, "agent", "cap", Read); err != nil {
+	if _, err := s.GrantIfAbsent(ctx, "agent", "cap", Read); err != nil {
 		t.Fatal(err)
 	}
 	if !s.Allowed(ctx, "agent", "cap", Read) {
@@ -37,9 +37,9 @@ func TestGlobalAdminIsExplicitAndDoesNotImplyCapabilityRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	s := New(db)
-	if err := s.Grant(ctx, "root", "*", Admin); err != nil {
+	if _, err := s.GrantIfAbsent(ctx, "root", "*", Admin); err != nil {
 		t.Fatal(err)
 	}
 	if !s.Allowed(ctx, "root", "*", Admin) {
@@ -56,7 +56,7 @@ func TestGrantIfAbsentReportsOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	s := New(db)
 	created, err := s.GrantIfAbsent(ctx, "agent", "cap", Invoke)
 	if err != nil || !created {
@@ -74,7 +74,7 @@ func TestGrantRejectsInvalidInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	s := New(db)
 	for _, test := range []struct {
 		identity, capability string
@@ -84,7 +84,7 @@ func TestGrantRejectsInvalidInputs(t *testing.T) {
 		{"agent", "", Read},
 		{"agent", "cap", Permission("invkoe")},
 	} {
-		if err := s.Grant(ctx, test.identity, test.capability, test.permission); err == nil {
+		if _, err := s.GrantIfAbsent(ctx, test.identity, test.capability, test.permission); err == nil {
 			t.Fatalf("Grant(%q, %q, %q) accepted invalid input", test.identity, test.capability, test.permission)
 		}
 	}

@@ -1,33 +1,41 @@
 # NineA
 
-[简体中文](docs/zh-CN/README.md)
+NineA is a local capability runtime for AI agents. It turns integrations into
+capabilities that a human or agent can search and run from the current project.
 
-## 🚀 Turn APIs, MCP tools, and A2A agents into Skills every agent can use
+## Install
 
-NineA is a capability layer for AI agents. It turns heterogeneous upstream
-systems into inspectable, executable Skills on the local filesystem—the
-interface coding agents already understand best.
-
-```text
-YAML APIs ─┐
-MCP tools  ├──→ NineA Catalog ──→ filesystem Skills ──→ any agent
-A2A agents ┘          │                    │
-                      └── local search      └── explicit commands
+```sh
+brew install gopact-ai/tap/ninea
 ```
 
-The fastest path is one YAML file:
+Already installed? Update with `brew upgrade gopact-ai/tap/ninea`.
+
+## 60-second quick start
+
+In any project, save this as `weather.yaml`. If an agent is translating API
+documentation, it can read the embedded contract before the first integration
+or gateway Skill exists:
+
+```sh
+9a connect --guide http --json
+```
+
+Then create:
 
 ```yaml
-apiVersion: 9a.dev/v1alpha1
-kind: Skill
-metadata:
-  name: weather
-  description: Find a city and read its current weather.
+version: 1
+name: weather
+description: Read current weather for coordinates.
+type: http
+
 services:
   forecast:
     baseURL: https://api.open-meteo.com
-operations:
+
+capabilities:
   current-weather:
+    description: Read current temperature and wind.
     service: forecast
     method: GET
     path: /v1/forecast
@@ -35,7 +43,20 @@ operations:
       query:
         latitude: "{{ input.latitude }}"
         longitude: "{{ input.longitude }}"
-        current: temperature_2m
+        current: temperature_2m,wind_speed_10m
+    inputSchema:
+      type: object
+      required: [latitude, longitude]
+      additionalProperties: false
+      properties:
+        latitude: {type: number}
+        longitude: {type: number}
+    outputSchema:
+      type: object
+      required: [temperature_2m, wind_speed_10m]
+      properties:
+        temperature_2m: {type: number}
+        wind_speed_10m: {type: number}
     hooks:
       afterResponse:
         - transform:
@@ -43,190 +64,117 @@ operations:
             expression: .body.current
 ```
 
-```sh
-9a validate weather.yaml
-9a add weather.yaml
-printf '%s\n' '{"latitude":31.2,"longitude":121.5}' | \
-  .agents/skills/weather/operations/current-weather/invoke
-```
-
-NineA attaches a visible, read-only Skill, not a hidden tool registration:
-
-```text
-.agents/skills/weather/
-├── SKILL.md
-├── operations/current-weather/
-│   ├── schema.json
-│   └── invoke
-└── references/source.yaml
-```
-
-Add more operations, more API origins, or ordered workflows to the same YAML
-and they remain one coherent domain Skill. Variables resolve from the daemon
-environment. Request and response hooks can set headers, remove headers, or
-shape JSON with embedded jq. An explicitly enabled, bounded executable hook is
-available for signing and transformations that cannot be declarative.
-
-See the runnable [Open-Meteo example](examples/declarative/open-meteo.yaml),
-the [multi-API bundle](examples/declarative/api-bundle.yaml), and the complete
-[Declarative Skills manual](docs/declarative-skills.md).
-
-The first agent-facing command also attaches NineA's built-in `using-ninea`
-Skill. An AI agent can read it to discover, invoke, add, update, and diagnose
-capabilities without requiring the user to memorize the CLI or YAML schema.
-
-## 🧭 Why files and commands
-
-AI agents are already excellent at two durable interfaces:
-
-- the **filesystem** for discovery and context—plain instructions, schemas,
-  provenance, search, and selective loading;
-- the **command line** for execution—a visible boundary between reading about
-  a capability and causing an upstream side effect.
-
-NineA keeps thousands of capabilities out of the prompt. Agents search the
-local Catalog, load only the useful Skills into their namespace, and invoke a
-small command with JSON. The consuming agent does not need an MCP client, A2A
-client, API SDK, credential handling, or a vendor-specific tool registry.
-
-This shape takes inspiration from Plan 9 namespaces: heterogeneous resources
-become easier to compose when adapters present a small common interface and
-each caller assembles the view it needs. NineA does not implement 9P and does
-not pretend remote actions are files. Files disclose capabilities; commands
-perform actions. Read [Architecture and Plan 9](docs/architecture.md).
-
-## 📦 Install
-
-Homebrew installs one `9a` command on macOS or Linux:
+Then run:
 
 ```sh
-brew install gopact-ai/tap/ninea
+9a connect weather.yaml
+9a search weather/current-weather --json
+9a run weather/current-weather \
+  --input '{"latitude":31.2,"longitude":121.5}'
 ```
 
-Upgrade it with:
+`connect` prints `9a search <integration> --json` to list every connected
+capability. Use an exact `<integration>/<capability>` search from that result to
+inspect its input and output contracts. NineA saves the editable source at
+`.9a/integrations/weather.yaml`; re-running it updates the same integration.
+Version 1 HTTP manifests require an explicit `inputSchema` and `outputSchema`
+for every capability and workflow, so agents never have to infer a contract
+from request templates.
+
+## Three concepts
+
+- **Integration** — one external system, such as a weather API.
+- **Capability** — one action, such as `current-weather`.
+- **Workspace** — the project whose agent can use those capabilities.
+
+NineA prepares a workspace automatically and installs one `using-ninea`
+gateway Skill shared by every integration.
+
+## Daily use
 
 ```sh
-brew upgrade gopact-ai/tap/ninea
+9a search weather
+9a run weather/current-weather --input @request.json
+cat request.json | 9a run weather/current-weather
+9a status
+9a doctor
+9a disconnect weather
 ```
 
-Confirm which version Homebrew placed on `PATH`, and explore complete command
-arguments without starting the daemon:
+`status` reports whether integrations are ready and prints the next action for
+missing credentials or broken state. `disconnect` removes the active
+integration but keeps `.9a/integrations/weather.yaml`. Add `--json` to data
+commands for machine-readable output.
+
+Capabilities that may change an upstream system require explicit approval:
 
 ```sh
-9a version
-9a --help
-9a help calls events
+9a run orders/create-order --input @order.json --json
+# After the user approves this exact input, reuse data.approvalToken:
+9a run orders/create-order --input @order.json \
+  --approve "$APPROVAL_TOKEN"
 ```
 
-After upgrading, restart a Homebrew-managed service with
-`brew services restart gopact-ai/tap/ninea`, then run `9a update --check` and
-`9a update` to refresh the built-in Skill and the current workspace's managed
-views. Use `9a update --all` only when every attached workspace should be
-reconciled. See
-[Upgrade NineA](docs/getting-started.md#upgrade-ninea) for the safe sequence and
-the distinction between a software upgrade and a workspace update.
+The approval token binds the capability revision and exact JSON input. It can
+be used once, expires after 10 minutes, and is invalidated when the local
+daemon restarts. Changing either bound value also requires a new preflight and
+explicit approval.
 
-[GitHub Releases](https://github.com/gopact-ai/9a/releases) provides archives
-and SHA-256 checksums for macOS and Linux on x86-64 and ARM64.
+## Authenticated APIs
 
-From a workspace, run one command:
+Manifests name credential aliases, never secret values. Store a declared value
+through stdin or the hidden terminal prompt:
 
 ```sh
-9a attach
+9a secret set private-api.api-token
+printf '%s' "$API_TOKEN" | 9a secret set private-api.api-token
 ```
 
-`9a` starts its local daemon when needed, creates a private state directory,
-and generates the first administrator token automatically. It reads the socket
-and token from `$HOME/.local/state/ninea`, so shell configuration is not
-required. `NINEA_SOCKET` and `NINEA_TOKEN` remain explicit overrides. The
-[User Guide](docs/getting-started.md) covers persistent startup, upgrades,
-separate agent identities, ACLs, MCP, A2A, and the complete command reference.
+Values go to the operating system credential store (system keyring) and are
+scoped to the current workspace. The same reference can hold a different value
+in another workspace. See the
+[authenticated HTTP example](examples/integrations/authenticated-http.yaml).
 
-From a workspace, the normal agent workflow starts automatically:
+## Other integration types
+
+Connect a local MCP server or a remote A2A agent without writing YAML:
 
 ```sh
-9a search "weather"
-9a status --json
+9a connect mcp --name local-tools -- /absolute/path/to/server
+9a connect a2a --name research-agent https://agent.example.com
 ```
 
-`9a search` combines provider capabilities with user-owned Skills already in
-`.agents/skills`. Each search rescans every attached workspace's Skill
-directories containing `SKILL.md`, so added, changed, and removed files are
-reflected in the local Catalog without a separate import command.
+For a bearer-authenticated A2A agent, use an
+[A2A manifest](docs/reference/manifest.md#a2a) and store its declared credential
+with `9a secret set`.
 
-Commands use concise human-readable output by default. Add the global `--json`
-flag when a script needs stable machine-readable output.
+## Use from an agent
 
-NineA prefers a separate read-only FUSE mount for each managed Skill when the
-platform runtime is available. Otherwise it atomically publishes integrity-
-checked read-only files and reports the fallback reason in `9a status --json`. It
-never mounts over or replaces user-owned Skills. Use `9a update` to rediscover
-providers and repair views, and `9a detach` to remove only the workspace view.
+The `using-ninea` gateway Skill teaches an agent to search for capabilities and
+call `9a run`. Capability descriptions are loaded only when needed instead of
+being added to the prompt at startup.
 
-## 🔌 Three integration paths
+The manifest is an Agent-to-NineA contract, not a form the user must learn.
+Give an agent API documentation or an OpenAPI file and ask it to create an
+integration and connect it. On a fresh workspace it starts with
+`9a connect --guide http --json`; successful connection then projects the shared
+gateway Skill.
 
-| Upstream | Integration path | Best for |
-| --- | --- | --- |
-| JSON HTTP APIs | Built-in declarative YAML | One API or a domain bundle, environment variables, hooks, and workflows |
-| MCP | Built-in local stdio adapter | Existing MCP servers and tool discovery |
-| A2A | Built-in HTTP+JSON 1.0 adapter | Existing agents, skills, asynchronous Tasks, and cancellation |
-| Any other protocol | Language-neutral `9a.adapter/v1` executable | Custom discovery, streaming semantics, retries, or non-HTTP transports |
+## Trust boundary
 
-MCP and A2A capabilities enter the same Catalog and can be projected
-selectively:
+Searching and checking status have no upstream side effect. During normal
+capability use, `run` is the execution boundary, and mutating actions require
+an approval token. All MCP and A2A runs require approval. Integration YAML is
+strictly decoded: unknown fields, duplicate keys, aliases, multiple documents,
+unsafe remote HTTP URLs, and oversized input are rejected.
 
-```sh
-9a search "weather temperature"
-9a project add mcp/weather/get-weather .agents/skills
-printf '%s\n' '{"location":"Shanghai"}' | \
-  .agents/skills/ninea-mcp-weather-get-weather/scripts/invoke
-```
+MCP servers and executable hooks are local code running with your operating
+system account's privileges. Use a sandbox or separate account when that trust
+boundary is too broad. See [Security](docs/SECURITY.md).
 
-Remove a provider and every managed view sourced from it with
-`9a providers remove <protocol> <name>`.
+See the [documentation index](docs/INDEX.md) for guides and reference material.
 
-For work that must outlive one CLI request, NineA persists call state, results,
-events, and confirmed cancellation in SQLite:
-
-```sh
-CALL_ID="$(printf '%s\n' '{"location":"Shanghai"}' | \
-  9a calls start mcp/weather/get-weather)"
-9a calls get "$CALL_ID"
-9a calls events "$CALL_ID" --limit 100
-```
-
-## 🔒 Security boundaries
-
-NineA uses bearer identities, a private Unix socket, and default-deny
-capability ACLs. Reading and invocation are separate permissions. Remote API
-URLs require HTTPS, except loopback development endpoints. YAML is strictly
-decoded before installation; secrets remain environment references.
-
-Executable hooks, MCP servers, and custom executable adapters are trusted local
-code running with the daemon user's privileges. Use a dedicated OS account or
-sandbox when that boundary is not strong enough. Read the complete
-[Security guide](docs/SECURITY.md).
-
-FUSE provides kernel-enforced read-only semantics. The directory fallback
-prevents normal tools from editing managed content and detects changes with
-SHA-256 manifests, but the owner of the operating-system account can still
-replace files or permissions; use `--backend fuse` when that distinction is a
-requirement.
-
-## 📚 Documentation
-
-- [Declarative Skills](docs/declarative-skills.md)—YAML schema, variables,
-  templates, hooks, workflows, lifecycle, and troubleshooting
-- [Declarative examples](examples/declarative/README.md)—public weather,
-  authenticated APIs, multi-API bundles, and executable hooks
-- [User Guide](docs/getting-started.md)—AI-agent operation, installation,
-  upgrades, daemon, identities, MCP, A2A, and CLI reference
-- [Building adapters](docs/adapters.md)—custom executable protocol and registry
-- [Architecture and Plan 9](docs/architecture.md)
-- [Security](docs/SECURITY.md)
-- [Contributing](docs/CONTRIBUTING.md)
-
-Run the complete test suite, including process-level E2E coverage:
+## Development
 
 ```sh
 go test -count=1 ./...

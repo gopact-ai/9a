@@ -36,5 +36,25 @@ func UsingNineA(buildVersion string) (mount.Snapshot, error) {
 	if buildVersion == "" {
 		buildVersion = "dev"
 	}
-	return mount.NewSnapshot("builtin/using-ninea", "using-ninea", fmt.Sprintf("%s", buildVersion), 0, files)
+	return mount.NewSnapshot("builtin/using-ninea", "using-ninea", buildVersion, 0, files)
+}
+
+// ConnectionGuide returns the embedded authoring contract used by the gateway
+// Skill. It gives a fresh workspace a bootstrap path before that Skill has been
+// projected.
+func ConnectionGuide(kind string) ([]byte, error) {
+	path := ""
+	switch kind {
+	case "http":
+		path = "skills/using-ninea/references/manifest.md"
+	case "mcp", "a2a":
+		path = "skills/using-ninea/references/integrations.md"
+	default:
+		return nil, fmt.Errorf("unsupported integration type %q: expected http, mcp, or a2a", kind)
+	}
+	data, err := skillFS.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read embedded %s guide: %w", kind, err)
+	}
+	return data, nil
 }

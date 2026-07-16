@@ -6,13 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/gopact-ai/9a/internal/capability"
+	"github.com/gopact-ai/9a/internal/jsonvalue"
 	"github.com/gopact-ai/9a/internal/provider"
 )
 
-var ErrNotFound = errors.New("capability not found")
+var (
+	ErrNotFound  = errors.New("capability not found")
+	ErrAmbiguous = errors.New("capability reference is ambiguous")
+)
 
 type Repository struct{ db *sql.DB }
 
@@ -112,10 +117,65 @@ func (r *Repository) GetCapability(ctx context.Context, id string) (capability.C
 		return capability.Capability{}, err
 	}
 	var c capability.Capability
-	if err := json.Unmarshal(data, &c); err != nil {
+	if err := jsonvalue.Decode(data, &c); err != nil {
 		return c, err
 	}
 	return c, nil
+}
+
+func (r *Repository) ResolveWorkspaceCapability(ctx context.Context, root, ref string) (capability.Capability, error) {
+	if !filepath.IsAbs(root) {
+		return capability.Capability{}, errors.New("workspace root must be absolute")
+	}
+	return r.resolveCapability(ctx, filepath.Clean(root), ref)
+}
+
+func (r *Repository) resolveCapability(ctx context.Context, root, ref string) (capability.Capability, error) {
+	parts := strings.Split(ref, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || capability.Slug(parts[0]) != parts[0] || capability.Slug(parts[1]) != parts[1] {
+		return capability.Capability{}, fmt.Errorf("invalid capability reference %q: expected integration/capability", ref)
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT c.data_json,p.config_json FROM capabilities c JOIN providers p ON p.id=c.provider_id WHERE c.provider_name=? ORDER BY c.id`, parts[0])
+	if err != nil {
+		return capability.Capability{}, fmt.Errorf("query capability reference %q: %w", ref, err)
+	}
+	var match capability.Capability
+	matches := 0
+	for rows.Next() {
+		var data, rawConfig []byte
+		if err := rows.Scan(&data, &rawConfig); err != nil {
+			return capability.Capability{}, fmt.Errorf("scan capability reference %q: %w", ref, err)
+		}
+		var item capability.Capability
+		if err := jsonvalue.Decode(data, &item); err != nil {
+			return capability.Capability{}, fmt.Errorf("decode capability reference %q: %w", ref, err)
+		}
+		if root != "" {
+			var config map[string]string
+			if json.Unmarshal(rawConfig, &config) != nil || !filepath.IsAbs(config["workspace_root"]) || filepath.Clean(config["workspace_root"]) != root {
+				continue
+			}
+		}
+		if item.Source.Provider == parts[0] && capability.Slug(item.Source.UpstreamName) == parts[1] {
+			match = item
+			matches++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return capability.Capability{}, fmt.Errorf("iterate capability reference %q: %w", ref, err)
+	}
+	if err := rows.Close(); err != nil {
+		return capability.Capability{}, fmt.Errorf("close capability reference %q: %w", ref, err)
+	}
+	switch matches {
+	case 0:
+		return capability.Capability{}, ErrNotFound
+	case 1:
+		return match, nil
+	default:
+		return capability.Capability{}, fmt.Errorf("%w: %q resolves to %d capabilities", ErrAmbiguous, ref, matches)
+	}
 }
 
 func (r *Repository) ListCapabilities(ctx context.Context) ([]capability.Capability, error) {
@@ -123,7 +183,6 @@ func (r *Repository) ListCapabilities(ctx context.Context) ([]capability.Capabil
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []capability.Capability
 	for rows.Next() {
 		var data []byte
@@ -131,12 +190,19 @@ func (r *Repository) ListCapabilities(ctx context.Context) ([]capability.Capabil
 			return nil, err
 		}
 		var c capability.Capability
-		if err := json.Unmarshal(data, &c); err != nil {
+		if err := jsonvalue.Decode(data, &c); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *Repository) DB() *sql.DB { return r.db }
@@ -146,7 +212,6 @@ func (r *Repository) ListProviders(ctx context.Context) ([]provider.Provider, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []provider.Provider
 	for rows.Next() {
 		var p provider.Provider
@@ -161,18 +226,17 @@ func (r *Repository) ListProviders(ctx context.Context) ([]provider.Provider, er
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *Repository) DeleteProvider(ctx context.Context, providerID string) (err error) {
-	return r.deleteProvider(ctx, providerID, true)
-}
-
-func (r *Repository) DeleteProviderPreservingACL(ctx context.Context, providerID string) (err error) {
-	return r.deleteProvider(ctx, providerID, false)
-}
-
-func (r *Repository) deleteProvider(ctx context.Context, providerID string, deleteACL bool) (err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -182,10 +246,8 @@ func (r *Repository) deleteProvider(ctx context.Context, providerID string, dele
 			_ = tx.Rollback()
 		}
 	}()
-	if deleteACL {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
-			return err
-		}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM acl WHERE capability_id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
+		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM capability_fts WHERE id IN (SELECT id FROM capabilities WHERE provider_id=?)`, providerID); err != nil {
 		return err
