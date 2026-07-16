@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -20,9 +19,13 @@ import (
 
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/secret"
 )
 
-var canonicalProviderName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var (
+	canonicalProviderName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	scopedProviderID      = regexp.MustCompile(`^a2a/ws-[0-9a-f]{16}/[a-z0-9]+(?:-[a-z0-9]+)*$`)
+)
 
 var errUnsupportedRequiredExtension = errors.New("unsupported required A2A extension")
 
@@ -36,6 +39,7 @@ type Adapter struct {
 	pollInterval         time.Duration
 	maxPollInterval      time.Duration
 	taskTimeout          time.Duration
+	resolver             secret.Resolver
 }
 
 type activeTask struct {
@@ -59,6 +63,10 @@ const (
 )
 
 func New() *Adapter {
+	return NewWithResolver(nil)
+}
+
+func NewWithResolver(resolver secret.Resolver) *Adapter {
 	return &Adapter{
 		client:               &http.Client{Timeout: 30 * time.Second, CheckRedirect: safeRedirect},
 		cache:                map[string]resolvedProvider{},
@@ -67,6 +75,7 @@ func New() *Adapter {
 		pollInterval:         250 * time.Millisecond,
 		maxPollInterval:      5 * time.Second,
 		taskTimeout:          30 * time.Minute,
+		resolver:             resolver,
 	}
 }
 
@@ -104,7 +113,7 @@ func safeRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func validateProvider(p provider.Provider) error {
-	if p.Protocol != "a2a" || p.ID != "a2a/"+p.Name || !canonicalProviderName.MatchString(p.Name) {
+	if p.Protocol != "a2a" || !scopedProviderID.MatchString(p.ID) || !strings.HasSuffix(p.ID, "/"+p.Name) || !canonicalProviderName.MatchString(p.Name) {
 		return errors.New("A2A provider name must be a canonical non-empty slug")
 	}
 	return nil
@@ -203,7 +212,7 @@ func validateSecurityRequirements(card agentCard, requirements []agentSecurityRe
 	return options, nil
 }
 
-func bearerPolicyForRequirements(card agentCard, requirements []agentSecurityRequirement, providerName string) (bool, error) {
+func bearerPolicyForRequirements(card agentCard, requirements []agentSecurityRequirement, _ string) (bool, error) {
 	options, err := validateSecurityRequirements(card, requirements)
 	if err != nil {
 		return false, err
@@ -213,9 +222,6 @@ func bearerPolicyForRequirements(card agentCard, requirements []agentSecurityReq
 	}
 	if !options.bearer {
 		return false, errors.New("unsupported A2A authentication requirement")
-	}
-	if os.Getenv(tokenEnvironmentName(providerName)) == "" {
-		return false, errors.New("A2A bearer token is required")
 	}
 	return true, nil
 }
@@ -331,9 +337,12 @@ func (a *Adapter) resolve(ctx context.Context, p provider.Provider) (agentCard, 
 		}
 		return agentCard{}, resolvedProvider{}, adapterError("a2a_unavailable", "A2A discovery endpoint is unavailable")
 	}
-	defer response.Body.Close()
 	body, err := readBoundedJSON(response, "application/json", "application/a2a+json")
+	closeErr := response.Body.Close()
 	if err != nil {
+		return agentCard{}, resolvedProvider{}, adapterError("invalid_agent_card", "A2A discovery returned an invalid response")
+	}
+	if closeErr != nil {
 		return agentCard{}, resolvedProvider{}, adapterError("invalid_agent_card", "A2A discovery returned an invalid response")
 	}
 	var card agentCard
@@ -354,6 +363,11 @@ func (a *Adapter) resolve(ctx context.Context, p provider.Provider) (agentCard, 
 			return agentCard{}, resolvedProvider{}, adapterError("a2a_auth", policyErr.Error())
 		}
 		authBySkill[skill.ID] = bearer
+	}
+	for _, bearer := range authBySkill {
+		if bearer && p.Config["credential_reference"] == "" {
+			return agentCard{}, resolvedProvider{}, adapterError("a2a_auth", "A2A manifest must declare one bearer credential")
+		}
 	}
 	for _, candidate := range card.SupportedInterfaces {
 		if candidate.ProtocolBinding != "HTTP+JSON" || candidate.ProtocolVersion != protocolVersion {
@@ -385,7 +399,7 @@ func (a *Adapter) resolve(ctx context.Context, p provider.Provider) (agentCard, 
 }
 
 func (a *Adapter) Discover(ctx context.Context, p provider.Provider) ([]capability.Capability, error) {
-	card, _, err := a.resolve(ctx, p)
+	card, resolved, err := a.resolve(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -393,6 +407,9 @@ func (a *Adapter) Discover(ctx context.Context, p provider.Provider) ([]capabili
 	capabilities, _ := parseAgentCapabilities(card.Capabilities)
 	seenIDs := make(map[string]struct{}, len(card.Skills))
 	for _, skill := range card.Skills {
+		if capability.Slug(skill.ID) == "" {
+			return nil, adapterError("invalid_agent_card", "A2A skill ID must map to a non-empty capability reference")
+		}
 		id := capability.StableID("a2a", p.Name, skill.ID)
 		if _, exists := seenIDs[id]; exists {
 			return nil, adapterError("invalid_agent_card", "A2A AgentCard skills map to duplicate capability IDs")
@@ -413,17 +430,17 @@ func (a *Adapter) Discover(ctx context.Context, p provider.Provider) ([]capabili
 		if len(outputModes) == 0 {
 			outputModes = card.DefaultOutputModes
 		}
+		upstreamAuth := "none"
+		if resolved.authBySkill[skill.ID] {
+			upstreamAuth = "secret"
+		}
 		out = append(out, capability.Capability{
 			ID: id, Kind: "a2a.skill", Name: skill.Name, Description: skill.Description,
-			Source: capability.Source{Protocol: "a2a", Provider: p.Name, UpstreamName: skill.ID},
-			Input: capability.Contract{Mode: "json", MediaTypes: inputModes, JSONSchema: map[string]any{
-				"type": "object", "required": []string{"parts"}, "properties": map[string]any{
-					"parts": map[string]any{"type": "array", "minItems": 1}, "configuration": map[string]any{"type": "object"}, "metadata": map[string]any{"type": "object"},
-				},
-			}},
-			Output:    capability.Contract{Mode: "a2a.response", MediaTypes: outputModes},
+			Source:    capability.Source{Protocol: "a2a", Provider: p.Name, UpstreamName: skill.ID},
+			Input:     capability.Contract{Mode: "json", MediaTypes: inputModes, JSONSchema: invokeInputSchema()},
+			Output:    capability.Contract{Mode: "a2a.response", MediaTypes: outputModes, JSONSchema: map[string]any{}},
 			Lifecycle: capability.Lifecycle{Sync: true, Cancelable: true},
-			Security:  capability.Security{RequiresApproval: "never", UpstreamAuth: "provider-configured"},
+			Security:  capability.Security{RequiresApproval: "always", UpstreamAuth: upstreamAuth},
 			Tags:      append([]string(nil), skill.Tags...), Examples: append([]string(nil), skill.Examples...), RawMetadata: raw,
 		})
 	}

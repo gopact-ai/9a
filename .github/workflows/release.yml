@@ -30,34 +30,71 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Create next patch tag
+      - name: Resolve declared release
         id: version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          tag=$(git tag --points-at "$SHA" --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
-          if [ -z "$tag" ]; then
-            latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
-            tag=$(./scripts/next-patch-version.sh "$latest")
+          tag=$(./scripts/release-version.sh VERSION)
+          tag_sha=$(git rev-list -n 1 "$tag" 2>/dev/null || true)
+          write_outputs() {
+            {
+              for output in "$@"; do
+                printf '%s\n' "$output"
+              done
+            } >> "$GITHUB_OUTPUT"
+          }
+          if [ -n "$tag_sha" ] && [ "$tag_sha" != "$SHA" ]; then
+            write_outputs "tag=$tag" "active=false" "publish=false"
+            exit 0
+          fi
+          if [ -z "$tag_sha" ]; then
             git tag "$tag" "$SHA"
             git push origin "$tag"
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          write_outputs "tag=$tag" "active=true"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            release_dir=$(mktemp -d)
+            version=${tag#v}
+            expected_archives=$(printf '%s\n' \
+              "9a_${version}_darwin_amd64.tar.gz" \
+              "9a_${version}_darwin_arm64.tar.gz" \
+              "9a_${version}_linux_amd64.tar.gz" \
+              "9a_${version}_linux_arm64.tar.gz" | sort)
+            expected_assets=$(printf '%s\n%s\n' "$expected_archives" checksums.txt | sort)
+            release_state=$(gh release view "$tag" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | join(" ")')
+            release_assets=$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)
+            if [ "$release_state" = "false false" ] &&
+              [ "$release_assets" = "$expected_assets" ] &&
+              gh release download "$tag" --dir "$release_dir" &&
+              [ -f "$release_dir/checksums.txt" ] &&
+              checksum_assets=$(awk 'NF == 2 { print $2 }' "$release_dir/checksums.txt" | sort) &&
+              [ "$checksum_assets" = "$expected_archives" ] &&
+              (cd "$release_dir" && sha256sum --check --strict checksums.txt)
+            then
+              mkdir -p dist
+              cp "$release_dir/checksums.txt" dist/checksums.txt
+              write_outputs "publish=false"
+            else
+              echo "Existing release is incomplete; recreating it" >&2
+              gh release delete "$tag" --yes
+              write_outputs "publish=true"
+            fi
+            rm -rf "$release_dir"
           else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+            write_outputs "publish=true"
           fi
 
       - name: Set up Go
+        if: steps.version.outputs.active == 'true' && steps.version.outputs.publish == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Publish GitHub release
-        if: steps.version.outputs.publish == 'true'
+        if: steps.version.outputs.active == 'true' && steps.version.outputs.publish == 'true'
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -67,7 +104,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest release artifacts
-        if: steps.version.outputs.publish == 'true'
+        if: steps.version.outputs.active == 'true'
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-checksums: ./dist/checksums.txt

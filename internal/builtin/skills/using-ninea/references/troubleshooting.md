@@ -1,64 +1,49 @@
-# Lifecycle and Troubleshooting
+# Troubleshooting
+
+Start with the user-facing state:
 
 ```sh
-9a attach
-9a status --json
-9a update --check
-9a update
-9a detach
+9a status
+9a doctor
+9a search <integration-or-capability>
 ```
 
-`attach` chooses FUSE when available and otherwise records a visible fallback
-to read-only managed files. `update` rediscovers providers, refreshes the
-Catalog, upgrades the built-in Skill, repairs valid owned directory
-projections, and removes stale views. `detach` removes only the current
-workspace view and its local-Skill Catalog entries; it preserves the
-user-owned Skill files, providers, API sources, ACLs, and call history.
-Because update rediscovers providers and changes the shared Catalog, it requires
-an administrator token.
+Agents should add `--json` to `search` and `run`. For every failed `run`, read
+`data.sideEffect` before taking another action:
 
-## Upgrade the software
+- `none`: no request reached the upstream system; follow `nextAction` before
+  retrying.
+- `possible`: the upstream outcome is unknown; never retry automatically.
+  Inspect upstream state when possible and report the uncertainty to the user.
 
-Do not confuse a software upgrade with a workspace update:
+`retryable` does not override `sideEffect`. An `approval_required` retry also
+requires explicit approval for the exact same input and must use the returned
+`data.approvalToken`. Tokens are single-use, expire after 10 minutes, and are
+invalidated by a daemon restart. `approval_mismatch` means the input differs or
+the token is invalid, expired, or already used; run without `--approve`, review
+the new preflight, and ask again.
 
-```sh
-brew update
-brew upgrade gopact-ai/tap/ninea
-brew services restart gopact-ai/tap/ninea # only when using the Homebrew service
-9a update --check
-9a update
-9a status --json
-```
+If a run fails with `capability_changed`, inspect the capability again. Any
+earlier approval is invalid because the executable contract changed. If it
+fails with `transport_error` and `sideEffect: possible`, the local runtime may
+already be processing the request; do not retry automatically.
 
-`brew upgrade` replaces the single `9a` binary. `9a update` upgrades the
-built-in Skill and reconciles managed views; it does not install software. Get
-the user's approval before changing packages or restarting the daemon.
-Preserve the state database and back it up when it contains important
-configuration.
-Use `9a update --all` only when every attached workspace should be reconciled.
+Common recovery actions:
 
-Common checks:
+- Invalid manifest: fix the exact field and line reported, then run `9a connect`
+  again. A failed update does not replace the last working integration.
+- Capability not found: run `9a search`, then use the displayed
+  `<integration>/<capability>` reference.
+- Gateway Skill changed or missing: explain that `9a doctor --fix` can also
+  reconnect stale sources, which may start MCP code or contact A2A. Run it only
+  after the user agrees.
+- Missing credential: ask the user to run the exact `9a secret set` command
+  shown by NineA. Never request or handle the secret value in the prompt.
+- Integration no longer needed: run `9a disconnect <name>`. The source remains
+  at `.9a/integrations/<name>.yaml`.
+- Incompatible local state: follow the exact state path and move/remove action
+  reported by NineA. Do not edit the database in place.
 
-- Daemon startup failed: inspect `$HOME/.local/state/ninea/daemon.log` and any
-  explicit `NINEA_SOCKET` override.
-- Unauthorized: set `NINEA_TOKEN` to an issued identity token.
-- Empty search: grant `read` on provider capabilities. For a local Skill, put
-  `SKILL.md` directly under `.agents/skills/<name>/` and search again.
-- Invocation denied: grant `invoke` separately.
-- FUSE fallback: inspect `9a status --json`; install/enable the platform FUSE
-  runtime or explicitly use the directory backend.
-- Changed content or modes: run `9a update`; do not edit the generated
-  directory. If the ownership manifest itself is missing or corrupt, move the
-  directory aside before updating so 9A never deletes ambiguous content.
-- Projection conflict: move the user-owned directory. 9A never overwrites it.
-- Missing provider credentials: restart `9a daemon` from an environment
-  containing them; projected files never contain resolved secrets.
-
-For long-running work:
-
-```sh
-CALL_ID="$(printf '%s\n' '<json>' | 9a calls start <capability-id>)"
-9a calls get "$CALL_ID"
-9a calls events "$CALL_ID" --after 0 --limit 100
-9a calls cancel "$CALL_ID"
-```
+Follow the next action printed by the public commands. Do not invent recovery
+steps outside that interface unless `9a doctor` reports that the local runtime
+itself cannot start.

@@ -5,10 +5,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+type File struct {
+	Path string
+	Mode fs.FileMode
+	Data []byte
+}
 
 type Snapshot struct {
 	LogicalID, Name, Version string
@@ -63,7 +70,7 @@ func NewSnapshot(logicalID, name, version string, revision int64, files []File) 
 		h.Write([]byte{0})
 		h.Write([]byte(f.Path))
 		h.Write([]byte{0})
-		h.Write([]byte(fmt.Sprintf("%o", f.Mode)))
+		_, _ = fmt.Fprintf(h, "%o", f.Mode)
 		h.Write([]byte{0})
 		h.Write(f.Data)
 	}

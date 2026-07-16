@@ -4,54 +4,46 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"github.com/gopact-ai/9a/internal/app"
-	callmodel "github.com/gopact-ai/9a/internal/call"
-	"github.com/gopact-ai/9a/internal/store"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gopact-ai/9a/internal/app"
+	"github.com/gopact-ai/9a/internal/store"
 )
 
-func TestCallQuotaErrorIsStable(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "ninea.db"))
-	if err != nil {
-		t.Fatal(err)
+func TestDecodeRequestIsStrict(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+		want Request
+		err  bool
+	}{
+		{name: "valid", body: `{"action":"status","name":"weather"}`, want: Request{Action: "status", Name: "weather"}},
+		{name: "unknown field", body: `{"action":"status","typo":true}`, err: true},
+		{name: "second value", body: `{"action":"status"} {"action":"doctor"}`, err: true},
+		{name: "missing action", body: `{"name":"weather"}`, err: true},
+		{name: "null", body: `null`, err: true},
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	repo := callmodel.NewRepository(db)
-	for i := range callmodel.MaxIdentityActiveCalls {
-		call := callmodel.Call{
-			ID:           fmt.Sprintf("call-api-quota-%d", i),
-			CapabilityID: "echo/demo/echo",
-			IdentityID:   "owner",
-			State:        callmodel.Submitted,
-		}
-		if err := repo.Create(ctx, call, json.RawMessage(`{}`)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	quotaErr := repo.Create(ctx, callmodel.Call{
-		ID:           "call-api-quota-over",
-		CapabilityID: "echo/demo/echo",
-		IdentityID:   "owner",
-		State:        callmodel.Submitted,
-	}, json.RawMessage(`{}`))
-
-	recorder := httptest.NewRecorder()
-	writeCallError(recorder, quotaErr)
-	var response Response
-	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	if recorder.Code != http.StatusBadRequest || response.Code != "call_quota_exceeded" || response.Error != "call quota exceeded" {
-		t.Fatalf("status=%d response=%#v", recorder.Code, response)
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := decodeRequest(strings.NewReader(test.body))
+			if (err != nil) != test.err {
+				t.Fatalf("decode error=%v want error=%v", err, test.err)
+			}
+			if !test.err && !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("request=%#v want %#v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -68,20 +60,16 @@ func testSocket(t *testing.T) string {
 	return path
 }
 
-func TestNonAdminTokenCannotUseAdministrativeActions(t *testing.T) {
+func TestUnknownTokenCannotUseRuntimeActions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db, err := store.Open(ctx, t.TempDir()+"/db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	a := app.New(db)
 	if err := a.Bootstrap(ctx, "root-secret"); err != nil {
-		t.Fatal(err)
-	}
-	agent, err := a.CreateToken(ctx, "agent")
-	if err != nil {
 		t.Fatal(err)
 	}
 	socket := testSocket(t)
@@ -89,34 +77,42 @@ func TestNonAdminTokenCannotUseAdministrativeActions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close(context.Background()) })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
 	}}
-	requests := []Request{{Action: "acl.grant", Identity: "agent", Capability: "x", Permissions: []string{"invoke"}}, {Action: "adapter.add", Protocol: "evil", Executable: "/bin/true"}, {Action: "provider.add", Protocol: "mcp", Name: "evil", Endpoint: "stdio:/bin/true"}, {Action: "declarative.add", Source: "invalid", Root: t.TempDir()}, {Action: "declarative.diff", Source: "invalid"}, {Action: "declarative.remove", Name: "weather"}, {Action: "token.create", Identity: "attacker"}}
+	requests := []Request{
+		{Action: "connect", Source: "invalid", Root: t.TempDir()},
+		{Action: "disconnect", Name: "weather"},
+		{Action: "secret.set", Name: "weather.token", Root: t.TempDir(), Value: "hidden"},
+		{Action: "secret.unset", Name: "weather.token", Root: t.TempDir()},
+	}
 	for _, bodyRequest := range requests {
 		bodyRequest := bodyRequest
 		t.Run(bodyRequest.Action, func(t *testing.T) {
 			body, _ := json.Marshal(bodyRequest)
 			req, _ := http.NewRequest("POST", "http://unix/rpc", bytes.NewReader(body))
-			req.Header.Set("Authorization", "Bearer "+agent)
+			req.Header.Set("Authorization", "Bearer unknown-token")
 			resp, err := (&http.Client{Transport: tr}).Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
 			var out Response
 			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				_ = resp.Body.Close()
 				t.Fatal(err)
 			}
-			if resp.StatusCode != http.StatusForbidden || out.Code != "permission_denied" {
+			if err := resp.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusUnauthorized || out.Code != "unauthorized" {
 				t.Fatalf("status=%d response=%#v", resp.StatusCode, out)
 			}
 		})
 	}
 }
 
-func TestAdminCanAddAdapterAndReceivesSanitizedStableErrors(t *testing.T) {
+func TestRemovedRPCSurfacesAreUnknownActions(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, t.TempDir()+"/db")
 	if err != nil {
@@ -136,54 +132,95 @@ func TestAdminCanAddAdapterAndReceivesSanitizedStableErrors(t *testing.T) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
 	}}
-	client := &http.Client{Transport: transport}
-	call := func(request Request) (int, Response) {
-		t.Helper()
-		body, _ := json.Marshal(request)
-		req, _ := http.NewRequest("POST", "http://unix/rpc", bytes.NewReader(body))
+	for _, action := range []string{"adapter.add", "provider.add", "provider.remove", "workspace.attach", "workspace.update", "workspace.detach", "acl.grant", "token.create", "project.add", "call.start", "call.get", "call.events", "call.cancel", "invoke", "declarative.add", "declarative.diff", "declarative.remove"} {
+		body, _ := json.Marshal(Request{Action: action})
+		req, _ := http.NewRequest(http.MethodPost, "http://unix/rpc", bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer root-secret")
-		resp, err := client.Do(req)
+		resp, err := (&http.Client{Transport: transport}).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
 		var out Response
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			t.Fatal(err)
+		decodeErr := json.NewDecoder(resp.Body).Decode(&out)
+		_ = resp.Body.Close()
+		if decodeErr != nil || resp.StatusCode != http.StatusBadRequest || out.Error != "unknown_action" {
+			t.Fatalf("%s status=%d response=%#v decode=%v", action, resp.StatusCode, out, decodeErr)
 		}
-		return resp.StatusCode, out
 	}
-	executable := filepath.Join(t.TempDir(), "billing-adapter")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+}
+
+func TestWriteRunErrorIncludesPersistentCallIdentity(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeRunError(recorder, &app.RunError{CallID: "call-123", Code: "upstream_failed", Message: "upstream unavailable"})
+	var response Response
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	status, out := call(Request{Action: "adapter.add", Protocol: "billing", Executable: executable})
-	if status != http.StatusOK || out.Error != "" {
-		t.Fatalf("first add status=%d response=%#v", status, out)
+	data, ok := response.Data.(map[string]any)
+	if recorder.Code != http.StatusBadRequest || response.Code != "upstream_failed" || !ok || data["call_id"] != "call-123" {
+		t.Fatalf("status=%d response=%#v", recorder.Code, response)
 	}
-	status, out = call(Request{Action: "adapter.add", Protocol: "billing", Executable: executable})
-	if status != http.StatusBadRequest || out.Code != "adapter_exists" || out.Error != "adapter already registered" {
-		t.Fatalf("duplicate status=%d response=%#v", status, out)
-	}
-	secretPath := filepath.Join(t.TempDir(), "secret-adapter-token")
-	status, out = call(Request{Action: "adapter.add", Protocol: "secret", Executable: secretPath})
-	if status != http.StatusBadRequest || out.Code != "invalid_adapter" || out.Error != "invalid adapter registration" {
-		t.Fatalf("invalid status=%d response=%#v", status, out)
-	}
-	if strings.Contains(out.Error, secretPath) || strings.Contains(out.Error, "secret-adapter-token") {
-		t.Fatalf("invalid response leaked executable: %#v", out)
-	}
-	sensitive := "sensitive-adapter-insert-detail-7f4c"
-	if _, err := db.Exec(`CREATE TRIGGER reject_sensitive_adapter BEFORE INSERT ON external_adapters WHEN NEW.protocol='broken' BEGIN SELECT RAISE(FAIL,'` + sensitive + `'); END`); err != nil {
+}
+
+func TestWriteRunErrorExplainsApprovalWithoutSideEffect(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	const token = "v1.7.0123456789abcdef0123456789abcdef"
+	writeRunError(recorder, &app.ApprovalRequiredError{Capability: "weather/update", Token: token})
+	var response Response
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	status, out = call(Request{Action: "adapter.add", Protocol: "broken", Executable: executable})
-	if status != http.StatusBadRequest || out.Code != "adapter_failed" || out.Error != "adapter registration failed" {
-		t.Fatalf("repository failure status=%d response=%#v", status, out)
+	data, ok := response.Data.(map[string]any)
+	next, nextOK := data["nextAction"].(map[string]any)
+	if recorder.Code != http.StatusConflict || response.Code != "approval_required" || !ok || data["approvalToken"] != token || data["sideEffect"] != "none" || !nextOK || next["instruction"] != "Obtain explicit approval, then retry the exact same input with --approve "+token {
+		t.Fatalf("status=%d response=%#v", recorder.Code, response)
 	}
-	encoded, _ := json.Marshal(out)
-	if bytes.Contains(encoded, []byte(sensitive)) || bytes.Contains(encoded, []byte("external_adapters")) || bytes.Contains(encoded, []byte("constraint")) {
-		t.Fatalf("repository failure leaked internal details: %s", encoded)
+}
+
+func TestWriteRunErrorRejectsApprovalForDifferentInput(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeRunError(recorder, &app.ApprovalMismatchError{Capability: "weather/update"})
+	var response Response
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := response.Data.(map[string]any)
+	if recorder.Code != http.StatusConflict || response.Code != "approval_mismatch" || !ok || data["sideEffect"] != "none" {
+		t.Fatalf("status=%d response=%#v", recorder.Code, response)
+	}
+}
+
+func TestWriteRunErrorRequiresFreshReviewWhenCapabilityChanged(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeRunError(recorder, &app.CapabilityChangedError{Capability: "weather/update"})
+	var response Response
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := response.Data.(map[string]any)
+	next, nextOK := data["nextAction"].(map[string]any)
+	if recorder.Code != http.StatusConflict || response.Code != "capability_changed" || !ok || data["sideEffect"] != "none" || !nextOK || next["command"] != "9a search weather/update --json" {
+		t.Fatalf("response=%#v data=%#v", response, data)
+	}
+}
+
+func TestWriteRunErrorExplainsMissingCredentialWithoutValue(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeRunError(recorder, &app.RunError{
+		CallID:     "call-credential",
+		Code:       "missing_credential",
+		Message:    "credential weather.api-token is missing",
+		Credential: "weather.api-token",
+		SideEffect: "none",
+	})
+	var response Response
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := response.Data.(map[string]any)
+	next, nextOK := data["nextAction"].(map[string]any)
+	if recorder.Code != http.StatusConflict || response.Code != "missing_credential" || !ok || data["sideEffect"] != "none" || data["call_id"] != "call-credential" || !nextOK || next["command"] != "9a secret set weather.api-token" {
+		t.Fatalf("status=%d response=%#v", recorder.Code, response)
 	}
 }
 
@@ -194,7 +231,7 @@ func TestListenRefusesRegularFileAndLiveSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	a := app.New(db)
 	if err := a.Bootstrap(ctx, "root"); err != nil {
 		t.Fatal(err)
@@ -214,88 +251,8 @@ func TestListenRefusesRegularFileAndLiveSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close(context.Background())
+	defer func() { _ = s.Close(context.Background()) }()
 	if _, err := Listen(path, a); err == nil {
 		t.Fatal("live socket unlinked")
-	}
-}
-
-func TestCallActionsRouteAndHideMissingCalls(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, t.TempDir()+"/db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	a := app.New(db)
-	if err := a.Bootstrap(ctx, "root-secret"); err != nil {
-		t.Fatal(err)
-	}
-	ownerToken, err := a.CreateToken(ctx, "owner")
-	if err != nil {
-		t.Fatal(err)
-	}
-	socket := testSocket(t)
-	s, err := Listen(socket, a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close(context.Background()) })
-	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
-	}}
-	callRPC := func(request Request) (int, Response) {
-		t.Helper()
-		body, _ := json.Marshal(request)
-		req, _ := http.NewRequest("POST", "http://unix/rpc", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+ownerToken)
-		resp, err := (&http.Client{Transport: transport}).Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		var out Response
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			t.Fatal(err)
-		}
-		return resp.StatusCode, out
-	}
-	for _, action := range []string{"call.get", "call.events", "call.cancel"} {
-		status, out := callRPC(Request{Action: action, CallID: "call-does-not-exist"})
-		if status != http.StatusBadRequest || out.Code != "call_not_found" || out.Error != "call not found" {
-			t.Fatalf("%s status=%d response=%#v", action, status, out)
-		}
-	}
-	status, out := callRPC(Request{Action: "call.start", Capability: "missing/capability", Input: json.RawMessage(`{}`)})
-	if status != http.StatusBadRequest || out.Code != "request_failed" || out.Error != "call request failed" {
-		t.Fatalf("call.start status=%d response=%#v", status, out)
-	}
-	repo := callmodel.NewRepository(db)
-	if err := repo.Create(ctx, callmodel.Call{ID: "call-page-api", CapabilityID: "test/capability", IdentityID: "owner", State: callmodel.Completed}, json.RawMessage(`{}`)); err != nil {
-		t.Fatal(err)
-	}
-	for i := 1; i <= 3; i++ {
-		if _, err := repo.AppendEvent(ctx, "call-page-api", json.RawMessage(`{"kind":"event"}`)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	status, out = callRPC(Request{Action: "call.events", CallID: "call-page-api", Limit: 2})
-	encoded, _ := json.Marshal(out.Data)
-	var first callmodel.EventPage
-	if err := json.Unmarshal(encoded, &first); err != nil || status != http.StatusOK || len(first.Events) != 2 || !first.HasMore || first.NextAfter != 2 {
-		t.Fatalf("first event page status=%d page=%#v err=%v", status, first, err)
-	}
-	status, out = callRPC(Request{Action: "call.events", CallID: "call-page-api", After: first.NextAfter, Limit: 2})
-	encoded, _ = json.Marshal(out.Data)
-	var second callmodel.EventPage
-	if err := json.Unmarshal(encoded, &second); err != nil || status != http.StatusOK || len(second.Events) != 1 || second.HasMore || second.NextAfter != 3 {
-		t.Fatalf("second event page status=%d page=%#v err=%v", status, second, err)
-	}
-	if _, err := db.Exec(`DROP TABLE calls`); err != nil {
-		t.Fatal(err)
-	}
-	status, out = callRPC(Request{Action: "call.get", CallID: "call-does-not-exist"})
-	if status != http.StatusBadRequest || out.Code != "request_failed" || out.Error != "call request failed" {
-		t.Fatalf("call.get repository failure status=%d response=%#v", status, out)
 	}
 }

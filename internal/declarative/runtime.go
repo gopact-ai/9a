@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,7 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gopact-ai/9a/internal/jsoncontract"
+	"github.com/gopact-ai/9a/internal/jsonvalue"
 	"github.com/gopact-ai/9a/internal/processgroup"
+	"github.com/gopact-ai/9a/internal/secret"
 	"github.com/itchyny/gojq"
 )
 
@@ -25,32 +29,14 @@ const maxResponseBytes = 8 << 20
 
 var executableHookSlots = make(chan struct{}, 32)
 
-func loadVariables(spec map[string]Variable) (map[string]any, error) {
-	result := make(map[string]any, len(spec))
-	for name, variable := range spec {
-		value := ""
-		if variable.FromEnv != "" {
-			value = os.Getenv(variable.FromEnv)
-		}
-		if value == "" {
-			value = variable.Default
-		}
-		if value == "" && variable.Required {
-			return nil, fmt.Errorf("required environment variable %s is not set", variable.FromEnv)
-		}
-		result[name] = value
-	}
-	return result, nil
-}
-
-func invokeOperation(ctx context.Context, operation Operation, service Service, input any, variables map[string]any) (any, error) {
+func invokeOperation(ctx context.Context, operation Operation, service Service, input any, credentials *credentialValues) (any, error) {
 	requestState := map[string]any{
 		"input":   input,
 		"query":   map[string]any{},
 		"headers": map[string]any{},
 		"body":    nil,
 	}
-	context := templateContext{"input": input, "vars": variables}
+	context := templateContext{"input": input, "secrets": credentials}
 	query, err := resolveValue(operation.Request.Query, context)
 	if err != nil {
 		return nil, err
@@ -143,17 +129,20 @@ func invokeOperation(ctx context.Context, operation Operation, service Service, 
 		}
 		return nil, errors.New("HTTP request failed")
 	}
-	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	closeErr := response.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("read HTTP response: %w", err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close HTTP response: %w", closeErr)
 	}
 	if len(raw) > maxResponseBytes {
 		return nil, errors.New("HTTP response exceeds 8 MiB")
 	}
 	var responseBody any
 	if len(raw) > 0 && strings.Contains(response.Header.Get("Content-Type"), "json") {
-		if err := json.Unmarshal(raw, &responseBody); err != nil {
+		if err := jsonvalue.Decode(raw, &responseBody); err != nil {
 			return nil, fmt.Errorf("decode JSON response: %w", err)
 		}
 	} else {
@@ -176,17 +165,31 @@ func invokeOperation(ctx context.Context, operation Operation, service Service, 
 	return responseState, nil
 }
 
-func invokeWorkflow(ctx context.Context, config *Config, workflow Workflow, input any, variables map[string]any) (any, error) {
+func invokeWorkflow(ctx context.Context, config *Config, workflow Workflow, input any, credentials *credentialValues) (any, error) {
 	steps := make(map[string]any, len(workflow.Steps))
 	for _, step := range workflow.Steps {
-		resolved, err := resolveValue(step.Input, templateContext{"input": input, "vars": variables, "steps": steps})
+		resolved, err := resolveValue(step.Input, templateContext{"input": input, "secrets": credentials, "steps": steps})
 		if err != nil {
 			return nil, fmt.Errorf("workflow step %q input: %w", step.ID, err)
 		}
-		operation := config.Operations[step.Use]
-		result, err := invokeOperation(ctx, operation, config.Services[operation.Service], resolved, variables)
+		operation := config.Capabilities[step.Use]
+		encodedInput, err := json.Marshal(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("workflow step %q input: encode: %w", step.ID, err)
+		}
+		if err := jsoncontract.Validate(operation.InputSchema, encodedInput); err != nil {
+			return nil, fmt.Errorf("workflow step %q input: %w", step.ID, err)
+		}
+		result, err := invokeOperation(ctx, operation, config.Services[operation.Service], resolved, credentials)
 		if err != nil {
 			return nil, fmt.Errorf("workflow step %q: %w", step.ID, err)
+		}
+		encodedOutput, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("workflow step %q output: encode: %w", step.ID, err)
+		}
+		if err := jsoncontract.Validate(operation.OutputSchema, encodedOutput); err != nil {
+			return nil, fmt.Errorf("workflow step %q output: %w", step.ID, err)
 		}
 		steps[step.ID] = result
 	}
@@ -198,6 +201,39 @@ func invokeWorkflow(ctx context.Context, config *Config, workflow Workflow, inpu
 }
 
 type templateContext map[string]any
+
+type credentialValues struct {
+	ctx         context.Context
+	resolver    secret.Resolver
+	credentials map[string]Credential
+	values      map[string]string
+}
+
+func newCredentialValues(ctx context.Context, resolver secret.Resolver, credentials map[string]Credential) *credentialValues {
+	return &credentialValues{ctx: ctx, resolver: resolver, credentials: credentials, values: make(map[string]string)}
+}
+
+func (v *credentialValues) resolve(alias string) (string, error) {
+	credential, ok := v.credentials[alias]
+	if !ok {
+		return "", fmt.Errorf("secret alias %q is undeclared", alias)
+	}
+	if value, ok := v.values[alias]; ok {
+		return value, nil
+	}
+	if v.resolver == nil {
+		return "", &secret.MissingError{Reference: credential.Secret}
+	}
+	value, err := v.resolver.Resolve(v.ctx, credential.Secret)
+	if err != nil {
+		return "", fmt.Errorf("resolve secret %q: %w", credential.Secret, err)
+	}
+	if value == "" {
+		return "", &secret.MissingError{Reference: credential.Secret}
+	}
+	v.values[alias] = value
+	return value, nil
+}
 
 func resolveValue(value any, context templateContext) (any, error) {
 	switch typed := value.(type) {
@@ -258,6 +294,9 @@ func lookupTemplate(context templateContext, namespace, path string) (any, error
 	current, ok := context[namespace]
 	if !ok {
 		return nil, fmt.Errorf("template namespace %q is unavailable", namespace)
+	}
+	if credentials, ok := current.(*credentialValues); ok {
+		return credentials.resolve(path)
 	}
 	for _, segment := range strings.Split(path, ".") {
 		switch typed := current.(type) {
@@ -435,13 +474,8 @@ func runExecutableHook(ctx context.Context, hook ExecHook, state any) (any, erro
 		return nil, errors.New("executable hook output exceeds configured limit")
 	}
 	var result any
-	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	if err := decoder.Decode(&result); err != nil {
+	if err := jsonvalue.Decode(stdout.Bytes(), &result); err != nil {
 		return nil, fmt.Errorf("decode executable hook output: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return nil, errors.New("executable hook must emit exactly one JSON value")
 	}
 	return result, nil
 }
@@ -482,10 +516,21 @@ func (b *boundedBuffer) Bytes() []byte {
 
 func (b *boundedBuffer) String() string { return string(b.Bytes()) }
 
-func runJQ(expression string, value any) (any, error) {
+type exactJSONNumber string
+
+func runJQ(expression string, value any) (result any, err error) {
 	query, err := gojq.Parse(expression)
 	if err != nil {
 		return nil, fmt.Errorf("parse jq: %w", err)
+	}
+	value, hasExactNumber := protectJQNumbers(value)
+	if hasExactNumber {
+		defer func() {
+			if recover() != nil {
+				result = nil
+				err = errors.New("jq cannot operate on a precision-sensitive JSON number")
+			}
+		}()
 	}
 	iterator := query.Run(value)
 	result, ok := iterator.Next()
@@ -494,12 +539,80 @@ func runJQ(expression string, value any) (any, error) {
 	}
 	if err, ok := result.(error); ok {
 		_ = err
+		if hasExactNumber {
+			return nil, errors.New("jq cannot operate on a precision-sensitive JSON number")
+		}
 		return nil, errors.New("jq transform failed")
 	}
 	if _, more := iterator.Next(); more {
 		return nil, errors.New("jq must produce exactly one result")
 	}
-	return result, nil
+	return restoreJQNumbers(result), nil
+}
+
+func protectJQNumbers(value any) (any, bool) {
+	switch value := value.(type) {
+	case json.Number:
+		if jqCanRepresentNumber(value) {
+			return value, false
+		}
+		return exactJSONNumber(value.String()), true
+	case []any:
+		result := make([]any, len(value))
+		protected := false
+		for i, item := range value {
+			result[i], protected = protectJQNumber(item, protected)
+		}
+		return result, protected
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		protected := false
+		for key, item := range value {
+			result[key], protected = protectJQNumber(item, protected)
+		}
+		return result, protected
+	default:
+		return value, false
+	}
+}
+
+func protectJQNumber(value any, alreadyProtected bool) (any, bool) {
+	value, protected := protectJQNumbers(value)
+	return value, alreadyProtected || protected
+}
+
+func jqCanRepresentNumber(number json.Number) bool {
+	if !strings.ContainsAny(number.String(), ".eE") {
+		return true // gojq represents arbitrary-size integers exactly.
+	}
+	exact, ok := new(big.Rat).SetString(number.String())
+	if !ok {
+		return false
+	}
+	value, err := number.Float64()
+	if err != nil {
+		return false
+	}
+	represented := new(big.Rat).SetFloat64(value)
+	return represented != nil && exact.Cmp(represented) == 0
+}
+
+func restoreJQNumbers(value any) any {
+	switch value := value.(type) {
+	case exactJSONNumber:
+		return json.Number(value)
+	case *big.Int:
+		return json.Number(value.String())
+	case []any:
+		for i, item := range value {
+			value[i] = restoreJQNumbers(item)
+		}
+	case map[string]any:
+		for key, item := range value {
+			value[key] = restoreJQNumbers(item)
+		}
+	}
+	return value
 }
 
 func appendQuery(values url.Values, key string, value any) {

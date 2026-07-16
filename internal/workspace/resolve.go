@@ -9,7 +9,7 @@ import (
 )
 
 // Resolve returns the canonical workspace directory. An explicit path wins;
-// otherwise a managed Skills tree selects its owner before Git discovery.
+// otherwise the NineA gateway Skill selects its owner before Git discovery.
 func Resolve(explicit, cwd string) (string, error) {
 	path := explicit
 	if path == "" {
@@ -36,8 +36,9 @@ func Resolve(explicit, cwd string) (string, error) {
 	if explicit == "" {
 		for path := filepath.Clean(abs); ; path = filepath.Dir(path) {
 			parent := filepath.Dir(path)
-			if filepath.Base(path) == "skills" && (filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".claude") {
-				owner, resolveErr := filepath.EvalSymlinks(filepath.Dir(parent))
+			agents := filepath.Dir(parent)
+			if filepath.Base(path) == "using-ninea" && filepath.Base(parent) == "skills" && filepath.Base(agents) == ".agents" {
+				owner, resolveErr := filepath.EvalSymlinks(filepath.Dir(agents))
 				if resolveErr != nil {
 					return "", fmt.Errorf("resolve workspace: %w", resolveErr)
 				}

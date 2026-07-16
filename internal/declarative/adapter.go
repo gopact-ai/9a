@@ -9,29 +9,43 @@ import (
 	"sync"
 
 	"github.com/gopact-ai/9a/internal/capability"
+	"github.com/gopact-ai/9a/internal/jsonvalue"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/secret"
 )
 
 type Adapter struct {
-	mu      sync.RWMutex
-	sources map[string]*Config
+	mu       sync.RWMutex
+	sources  map[string]*Config
+	resolver secret.Resolver
 }
 
 func NewAdapter() *Adapter {
-	return &Adapter{sources: make(map[string]*Config)}
+	return NewAdapterWithResolver(nil)
+}
+
+func NewAdapterWithResolver(resolver secret.Resolver) *Adapter {
+	return &Adapter{sources: make(map[string]*Config), resolver: resolver}
 }
 
 func (a *Adapter) Register(p provider.Provider, config *Config) error {
 	if config == nil {
-		return errors.New("declarative config is nil")
+		return errors.New("integration config is missing")
 	}
-	if p.Protocol != "api" || p.Name != config.Metadata.Name {
-		return errors.New("provider identity does not match declarative source")
+	if p.Protocol != "api" || p.Name != config.Name {
+		return errors.New("integration identity does not match its manifest")
 	}
 	a.mu.Lock()
 	a.sources[p.ID] = config
 	a.mu.Unlock()
 	return nil
+}
+
+func (a *Adapter) Snapshot(providerID string) *Config {
+	a.mu.RLock()
+	config := a.sources[providerID]
+	a.mu.RUnlock()
+	return config
 }
 
 func (a *Adapter) Unregister(providerID string) {
@@ -45,7 +59,7 @@ func (a *Adapter) source(p provider.Provider) (*Config, error) {
 	config := a.sources[p.ID]
 	a.mu.RUnlock()
 	if config == nil {
-		return nil, fmt.Errorf("declarative source %q is not registered", p.Name)
+		return nil, fmt.Errorf("integration %q is not loaded", p.Name)
 	}
 	return config, nil
 }
@@ -55,29 +69,31 @@ func (a *Adapter) Discover(_ context.Context, p provider.Provider) ([]capability
 	if err != nil {
 		return nil, err
 	}
-	result := make([]capability.Capability, 0, len(config.Operations)+len(config.Workflows))
-	for name, operation := range config.Operations {
-		result = append(result, makeCapability(config, name, "operation", operation.Description, operation.InputSchema, operation.OutputSchema, operationRequiresApproval(operation)))
+	result := make([]capability.Capability, 0, len(config.Capabilities)+len(config.Workflows))
+	for name, operation := range config.Capabilities {
+		result = append(result, makeCapability(config, name, "operation", operation.Description, operation.InputSchema, operation.OutputSchema, operationRequiresApproval(operation), operationUsesSecret(config, operation)))
 	}
 	for name, workflow := range config.Workflows {
 		requiresApproval := false
+		usesSecret := false
 		for _, step := range workflow.Steps {
-			if operationRequiresApproval(config.Operations[step.Use]) {
+			operation := config.Capabilities[step.Use]
+			if operationRequiresApproval(operation) {
 				requiresApproval = true
-				break
 			}
+			usesSecret = usesSecret || operationUsesSecret(config, operation) || hasSecretTemplate(step.Input)
 		}
-		result = append(result, makeCapability(config, name, "workflow", workflow.Description, workflow.InputSchema, workflow.OutputSchema, requiresApproval))
+		result = append(result, makeCapability(config, name, "workflow", workflow.Description, workflow.InputSchema, workflow.OutputSchema, requiresApproval, usesSecret))
 	}
 	return result, nil
 }
 
-func makeCapability(config *Config, name, kind, description string, input, output map[string]any, requiresApproval bool) capability.Capability {
+func makeCapability(config *Config, name, kind, description string, input, output map[string]any, requiresApproval, usesSecret bool) capability.Capability {
 	if description == "" {
-		description = config.Metadata.Description
+		description = config.Description
 	}
 	if description == "" {
-		description = name + " from " + config.Metadata.Name
+		description = name + " from " + config.Name
 	}
 	if input == nil {
 		input = map[string]any{"type": "object"}
@@ -90,26 +106,56 @@ func makeCapability(config *Config, name, kind, description string, input, outpu
 	if requiresApproval {
 		approval = "always"
 	}
+	upstreamAuth := "none"
+	if usesSecret {
+		upstreamAuth = "secret"
+	}
 	return capability.Capability{
-		ID:          capability.StableID("api", config.Metadata.Name, name),
+		ID:          capability.StableID("api", config.Name, name),
 		Kind:        kind,
 		Name:        name,
 		Description: description,
 		Source: capability.Source{
 			Protocol:     "api",
-			Provider:     config.Metadata.Name,
+			Provider:     config.Name,
 			UpstreamName: name,
 		},
 		Input:       capability.Contract{Mode: "json", JSONSchema: input, MediaTypes: []string{"application/json"}},
 		Output:      capability.Contract{Mode: "json", JSONSchema: output, MediaTypes: []string{"application/json"}},
 		Lifecycle:   capability.Lifecycle{Sync: true, Cancelable: true},
-		Security:    capability.Security{RequiresApproval: approval, UpstreamAuth: "environment"},
+		Security:    capability.Security{RequiresApproval: approval, UpstreamAuth: upstreamAuth},
 		RawMetadata: metadata,
 		Revision:    1,
 	}
 }
 
+func operationUsesSecret(config *Config, operation Operation) bool {
+	if hasSecretTemplate(config.Services[operation.Service].Headers) || hasSecretTemplate(operation.Request) {
+		return true
+	}
+	for _, hook := range append(append([]Hook(nil), operation.Hooks.BeforeRequest...), operation.Hooks.AfterResponse...) {
+		if hasSecretTemplate(hook.SetHeaders) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSecretTemplate(value any) bool {
+	found := false
+	err := walkStrings(value, func(text string) error {
+		for _, match := range templatePattern.FindAllStringSubmatch(text, -1) {
+			found = found || match[1] == "secrets"
+		}
+		return nil
+	})
+	return err == nil && found
+}
+
 func operationRequiresApproval(operation Operation) bool {
+	if operation.RequiresApproval {
+		return true
+	}
 	if !strings.EqualFold(operation.Method, "GET") {
 		return true
 	}
@@ -127,18 +173,15 @@ func (a *Adapter) Invoke(ctx context.Context, p provider.Provider, c capability.
 		return err
 	}
 	var data any
-	if err := json.Unmarshal(input, &data); err != nil {
+	if err := jsonvalue.Decode(input, &data); err != nil {
 		return fmt.Errorf("decode input: %w", err)
 	}
-	variables, err := loadVariables(config.Variables)
-	if err != nil {
-		return err
-	}
+	credentials := newCredentialValues(secret.WithWorkspace(ctx, p.Config["workspace_root"]), a.resolver, config.Credentials)
 	var result any
-	if operation, ok := config.Operations[c.Source.UpstreamName]; ok {
-		result, err = invokeOperation(ctx, operation, config.Services[operation.Service], data, variables)
+	if operation, ok := config.Capabilities[c.Source.UpstreamName]; ok {
+		result, err = invokeOperation(ctx, operation, config.Services[operation.Service], data, credentials)
 	} else if workflow, ok := config.Workflows[c.Source.UpstreamName]; ok {
-		result, err = invokeWorkflow(ctx, config, workflow, data, variables)
+		result, err = invokeWorkflow(ctx, config, workflow, data, credentials)
 	} else {
 		return fmt.Errorf("capability %q is not defined by source", c.ID)
 	}

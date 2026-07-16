@@ -1,0 +1,36 @@
+version: 1
+name: signed-orders
+description: Demonstrate an explicitly enabled executable request hook.
+type: http
+services:
+  orders:
+    baseURL: https://orders.example.com
+capabilities:
+  get-order:
+    service: orders
+    method: GET
+    path: /v1/orders
+    request:
+      query:
+        id: "{{ input.id }}"
+    inputSchema:
+      type: object
+      required: [id]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+    outputSchema:
+      type: object
+    hooks:
+      beforeRequest:
+        - exec:
+            command: [/absolute/path/to/examples/integrations/hooks/sign-request.py]
+            env: [ORDER_SIGNING_SECRET]
+            timeout: 2s
+            maxOutputBytes: 1048576
+      afterResponse:
+        - transform:
+            language: jq
+            expression: .body
+security:
+  allowExecutableHooks: true

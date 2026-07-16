@@ -33,6 +33,7 @@ var (
 	ErrTooManyEvents       = errors.New("call event limit exceeded")
 	ErrEventBudgetExceeded = errors.New("call event byte budget exceeded")
 	ErrQuotaExceeded       = errors.New("call quota exceeded")
+	ErrStorageInvariant    = errors.New("call storage invariant violated")
 
 	ErrIdentityActiveQuota   = errors.New("identity active call quota exceeded")
 	ErrGlobalActiveQuota     = errors.New("global active call quota exceeded")
@@ -130,6 +131,57 @@ LEFT JOIN call_storage_usage u ON u.call_id=c.id`, identity, identity, identity)
 	}
 }
 
+func pruneTerminalCallsForCreate(ctx context.Context, tx *immediateTx, identity string, inputBytes int64) error {
+	// ponytail: row-at-a-time pruning is normally capped by retained-call quotas; batch it if admission latency becomes measurable.
+	for {
+		quotaErr := checkCreateQuota(ctx, tx, identity, inputBytes)
+		if quotaErr == nil {
+			return nil
+		}
+		identityOnly := false
+		switch {
+		case errors.Is(quotaErr, ErrIdentityActiveQuota), errors.Is(quotaErr, ErrGlobalActiveQuota):
+			return quotaErr
+		case errors.Is(quotaErr, ErrIdentityRetainedQuota), errors.Is(quotaErr, ErrIdentityByteQuota):
+			identityOnly = true
+		case errors.Is(quotaErr, ErrGlobalRetainedQuota), errors.Is(quotaErr, ErrGlobalByteQuota):
+		default:
+			return quotaErr
+		}
+		deleted, err := deleteOldestTerminalCall(ctx, tx, identity, identityOnly)
+		if err != nil {
+			return err
+		}
+		if !deleted {
+			return quotaErr
+		}
+	}
+}
+
+func deleteOldestTerminalCall(ctx context.Context, tx *immediateTx, identity string, identityOnly bool) (bool, error) {
+	query := `SELECT id FROM calls WHERE state IN ('completed','failed','canceled','rejected') ORDER BY updated_at,created_at,id LIMIT 1`
+	var args []any
+	if identityOnly {
+		query = `SELECT id FROM calls WHERE identity_id=? AND state IN ('completed','failed','canceled','rejected') ORDER BY updated_at,created_at,id LIMIT 1`
+		args = append(args, identity)
+	}
+	var id string
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&id); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM calls WHERE id=? AND state IN ('completed','failed','canceled','rejected')`, id)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return changed == 1, nil
+}
+
 func addRetainedBytes(ctx context.Context, tx *immediateTx, id string, additional int64) error {
 	if additional < 0 {
 		return errors.New("invalid retained byte increment")
@@ -204,7 +256,7 @@ func (r *Repository) Create(ctx context.Context, c Call, input json.RawMessage) 
 			_ = tx.Rollback()
 		}
 	}()
-	if err = checkCreateQuota(ctx, tx, c.IdentityID, int64(len(input))); err != nil {
+	if err = pruneTerminalCallsForCreate(ctx, tx, c.IdentityID, int64(len(input))); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO calls(id,capability_id,identity_id,state,code,message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, c.ID, c.CapabilityID, c.IdentityID, c.State, c.Code, c.Message, c.CreatedAt.Format(time.RFC3339Nano), c.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
@@ -360,12 +412,8 @@ func (r *Repository) AppendEvent(ctx context.Context, id string, envelope json.R
 		return Event{}, err
 	}
 	var usageExists int
-	backfilledUsage := false
 	if err = tx.QueryRowContext(ctx, `SELECT 1 FROM call_event_usage WHERE call_id=?`, id).Scan(&usageExists); errors.Is(err, sql.ErrNoRows) {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO call_event_usage(call_id,event_count,byte_count) SELECT ?,count(*),coalesce(sum(length(data_json)),0) FROM events WHERE call_id=? ON CONFLICT(call_id) DO NOTHING`, id, id); err != nil {
-			return Event{}, err
-		}
-		backfilledUsage = true
+		return Event{}, fmt.Errorf("%w: event usage row is missing", ErrStorageInvariant)
 	} else if err != nil {
 		return Event{}, err
 	}
@@ -386,11 +434,6 @@ func (r *Repository) AppendEvent(ctx context.Context, id string, envelope json.R
 		limitErr := ErrEventBudgetExceeded
 		if count >= MaxEvents {
 			limitErr = ErrTooManyEvents
-		}
-		if backfilledUsage {
-			if commitErr := tx.Commit(ctx); commitErr != nil {
-				return Event{}, commitErr
-			}
 		}
 		return Event{}, limitErr
 	}
@@ -436,7 +479,6 @@ func (r *Repository) ListEventPage(ctx context.Context, id string, after, limit 
 	if err != nil {
 		return EventPage{}, err
 	}
-	defer rows.Close()
 	page := EventPage{Events: make([]Event, 0, limit), NextAfter: after}
 	var pageBytes int64
 	for rows.Next() {
@@ -464,6 +506,10 @@ func (r *Repository) ListEventPage(ctx context.Context, id string, after, limit 
 		pageBytes += envelopeBytes
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return EventPage{}, err
+	}
+	if err := rows.Close(); err != nil {
 		return EventPage{}, err
 	}
 	return page, nil

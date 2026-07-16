@@ -1,7 +1,6 @@
 exclude = [
   "^mailto:",
   "^https://github.com/gopact-ai/9a($|/)",
-  "^https://9p\\.io/sys/doc/(9|names)\\.html$",
 ]
 exclude_path = [
   ".worktrees",

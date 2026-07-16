@@ -25,17 +25,6 @@ require_docker() {
   docker info >/dev/null
 }
 
-check_legacy_tls_links() {
-  local url
-  for url in \
-    "https://9p.io/sys/doc/9.html" \
-    "https://9p.io/sys/doc/names.html"; do
-    curl --fail --silent --show-error --location \
-      --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 30 \
-      --output /dev/null "$url"
-  done
-}
-
 require_docker
 
 run davidanson/markdownlint-cli2:v0.23.0@sha256:97996d59837fa7cc27fc5f0e16d72eae71d0cefee15c437ee1d7cdbccb5552be "**/*.md" "#.worktrees/**" "#.agents/**"
@@ -51,5 +40,3 @@ if ((${#files[@]})); then
 else
   echo "No Markdown files to link-check."
 fi
-
-check_legacy_tls_links

@@ -12,10 +12,11 @@ import (
 	"time"
 )
 
-func TestZeroConfigurationAttachStartsDaemon(t *testing.T) {
+func TestConcurrentStatusStartsSingleLocalDaemon(t *testing.T) {
 	if testing.Short() {
 		t.Skip("process e2e")
 	}
+
 	root, err := os.MkdirTemp("/tmp", "ninea-zero-")
 	if err != nil {
 		t.Fatal(err)
@@ -25,9 +26,10 @@ func TestZeroConfigurationAttachStartsDaemon(t *testing.T) {
 	build(t, cli, "./cmd/9a")
 	home := filepath.Join(root, "home")
 	workspace := filepath.Join(root, "workspace")
-	if err := os.MkdirAll(workspace, 0755); err != nil {
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	stateDir := filepath.Join(home, ".local", "state", "ninea")
 	pidPath := filepath.Join(stateDir, "daemon.pid")
 	t.Cleanup(func() {
@@ -49,11 +51,13 @@ func TestZeroConfigurationAttachStartsDaemon(t *testing.T) {
 		}
 		_ = process.Kill()
 	})
+
 	env := isolatedEnv(home)
 	commands := make([]*exec.Cmd, 10)
 	outputs := make([]bytes.Buffer, len(commands))
 	for i := range commands {
-		commands[i] = exec.Command(cli, "attach", "--workspace", workspace, "--backend", "directory")
+		commands[i] = exec.Command(cli, "status")
+		commands[i].Dir = workspace
 		commands[i].Env = env
 		commands[i].Stdout = &outputs[i]
 		commands[i].Stderr = &outputs[i]
@@ -64,20 +68,24 @@ func TestZeroConfigurationAttachStartsDaemon(t *testing.T) {
 	for i, command := range commands {
 		if err := command.Wait(); err != nil {
 			log, _ := os.ReadFile(filepath.Join(stateDir, "daemon.log"))
-			t.Fatalf("zero-configuration attach %d: %v\n%s\ndaemon log:\n%s", i, err, outputs[i].Bytes(), log)
+			t.Fatalf("status %d: %v\n%s\ndaemon log:\n%s", i, err, outputs[i].Bytes(), log)
+		}
+		if got := outputs[i].String(); got != "Not ready\n  No integrations connected.\n  Next: 9a connect <manifest.yaml>\n" {
+			t.Fatalf("status %d = %q, want Not ready", i, got)
 		}
 	}
+
 	log, err := os.ReadFile(filepath.Join(stateDir, "daemon.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(log, []byte("Error:")) {
-		t.Fatalf("concurrent commands started losing daemons:\n%s", log)
+	if got := bytes.Count(log, []byte("9a daemon is running")); got != 1 {
+		t.Fatalf("daemon starts = %d, want 1\n%s", got, log)
 	}
 	for path, mode := range map[string]os.FileMode{
-		stateDir:                               0700,
-		filepath.Join(stateDir, "admin-token"): 0600,
-		filepath.Join(stateDir, "ninea.sock"):  0600,
+		stateDir:                               0o700,
+		filepath.Join(stateDir, "admin-token"): 0o600,
+		filepath.Join(stateDir, "ninea.sock"):  0o600,
 	} {
 		info, err := os.Stat(path)
 		if err != nil || info.Mode().Perm() != mode {

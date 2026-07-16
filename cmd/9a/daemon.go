@@ -140,21 +140,48 @@ type daemonOptions struct {
 
 func prepareLocalPaths(options daemonOptions) error {
 	if options.paths.dir != "" {
-		if err := os.MkdirAll(options.paths.dir, 0700); err != nil {
-			return fmt.Errorf("create local state directory: %w", err)
-		}
-		if err := os.Chmod(options.paths.dir, 0700); err != nil {
+		if err := ensurePrivateDirectory(options.paths.dir, true); err != nil {
 			return fmt.Errorf("secure local state directory: %w", err)
 		}
 	}
+	checked := map[string]struct{}{}
 	for _, path := range []string{options.state, options.socket} {
 		dir := filepath.Dir(path)
-		if dir == "." || dir == options.paths.dir {
+		if dir == options.paths.dir {
 			continue
 		}
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return fmt.Errorf("create directory %s: %w", dir, err)
+		if _, exists := checked[dir]; exists {
+			continue
 		}
+		checked[dir] = struct{}{}
+		if err := ensurePrivateDirectory(dir, false); err != nil {
+			return fmt.Errorf("secure directory for %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func ensurePrivateDirectory(path string, repairExisting bool) error {
+	_, beforeErr := os.Lstat(path)
+	created := errors.Is(beforeErr, os.ErrNotExist)
+	if beforeErr != nil && !created {
+		return beforeErr
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("path must be a real directory")
+	}
+	if created || repairExisting {
+		return os.Chmod(path, 0o700)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("directory %q has permissions %04o; run chmod 700 %q before starting 9a", path, info.Mode().Perm(), path)
 	}
 	return nil
 }
@@ -215,7 +242,7 @@ func startLocalDaemon(paths localPaths, socket string) error {
 	if ready {
 		return nil
 	}
-	defer lockFile.Close()
+	defer func() { _ = lockFile.Close() }()
 	if socketAvailable(socket) {
 		return nil
 	}
@@ -223,7 +250,7 @@ func startLocalDaemon(paths localPaths, socket string) error {
 	if err != nil {
 		return fmt.Errorf("open daemon log %s: %w", paths.log, err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 	if err := os.Chmod(paths.log, 0600); err != nil {
 		return fmt.Errorf("secure daemon log %s: %w", paths.log, err)
 	}
@@ -338,7 +365,7 @@ func runDaemon(parent context.Context, options daemonOptions) error {
 		_ = server.Close(context.Background())
 		return fmt.Errorf("write daemon pid: %w", err)
 	}
-	defer os.Remove(options.paths.pid)
+	defer func() { _ = os.Remove(options.paths.pid) }()
 	listening = true
 	if startupLock != nil {
 		_ = startupLock.Close()

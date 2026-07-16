@@ -3,6 +3,7 @@ package declarative
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/provider"
+	"github.com/gopact-ai/9a/internal/secret"
 )
 
 func TestDeclarativeHookHelperProcess(t *testing.T) {
@@ -30,6 +32,10 @@ func TestDeclarativeHookHelperProcess(t *testing.T) {
 	if _, err := io.ReadAll(os.Stdin); err != nil {
 		os.Exit(4)
 	}
+	if os.Getenv("NINEA_DECLARATIVE_HOOK_LARGE_INTEGER") == "1" {
+		_, _ = os.Stdout.WriteString(`{"id":9007199254740993}`)
+		os.Exit(0)
+	}
 	_, _ = os.Stdout.WriteString(`{"hooked":true}`)
 	os.Exit(0)
 }
@@ -37,6 +43,21 @@ func TestDeclarativeHookHelperProcess(t *testing.T) {
 type recordingSink struct {
 	started bool
 	result  json.RawMessage
+}
+
+type changingSecretResolver struct {
+	values []string
+	calls  []string
+}
+
+func (r *changingSecretResolver) Resolve(_ context.Context, reference string) (string, error) {
+	r.calls = append(r.calls, reference)
+	if len(r.values) == 0 {
+		return "", &secret.MissingError{Reference: reference}
+	}
+	value := r.values[0]
+	r.values = r.values[1:]
+	return value, nil
 }
 
 func (s *recordingSink) Started() error {
@@ -58,10 +79,10 @@ func TestAdapterInvokesHTTPAndRunsDeclarativeHooks(t *testing.T) {
 		if r.URL.Path != "/v1/forecast" || r.URL.Query().Get("latitude") != "31.2" {
 			t.Errorf("request URL=%s", r.URL.String())
 		}
-		if got := r.Header.Get("X-Client"); got != "test-suite" {
+		if got := r.Header.Get("X-Client"); got != "ninea" {
 			t.Errorf("X-Client=%q", got)
 		}
-		if got := r.Header.Get("X-Trace"); got != "test-suite" {
+		if got := r.Header.Get("X-Trace"); got != "ninea" {
 			t.Errorf("X-Trace=%q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -74,7 +95,6 @@ func TestAdapterInvokesHTTPAndRunsDeclarativeHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("WEATHER_CLIENT", "test-suite")
 	adapter := NewAdapter()
 	providerConfig := provider.Provider{ID: "api/weather", Protocol: "api", Name: "weather"}
 	if err := adapter.Register(providerConfig, config); err != nil {
@@ -106,11 +126,124 @@ func TestAdapterInvokesHTTPAndRunsDeclarativeHooks(t *testing.T) {
 	}
 }
 
-func TestAdapterRejectsMissingRequiredVariable(t *testing.T) {
-	source := strings.Replace(validSource, "required: false", "required: true", 1)
-	if source == validSource {
-		source = strings.Replace(validSource, "    default: ninea", "    required: true", 1)
+func TestAdapterPreservesLargeIntegersAcrossHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("id"); got != "9007199254740993" {
+			t.Errorf("query id=%q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":9007199254740993,"amount":0.123456789012345678901}`))
+	}))
+	defer server.Close()
+
+	source := fmt.Sprintf(`version: 1
+name: exact-numbers
+type: http
+services:
+  api:
+    baseURL: %s
+capabilities:
+  echo:
+    service: api
+    method: GET
+    path: /echo
+    request:
+      query:
+        id: "{{ input.id }}"
+    inputSchema:
+      type: object
+      required: [id]
+      properties:
+        id: {type: integer}
+    outputSchema:
+      type: object
+      required: [id, amount]
+      properties:
+        id: {type: integer}
+        amount: {type: number}
+    hooks:
+      afterResponse:
+        - transform:
+            language: jq
+            expression: .body
+`, server.URL)
+	config, err := Parse([]byte(source))
+	if err != nil {
+		t.Fatal(err)
 	}
+	adapter := NewAdapter()
+	p := provider.Provider{ID: "api/exact-numbers", Protocol: "api", Name: "exact-numbers"}
+	if err := adapter.Register(p, config); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil || len(capabilities) != 1 {
+		t.Fatalf("capabilities=%#v error=%v", capabilities, err)
+	}
+	sink := &recordingSink{}
+	if err := adapter.Invoke(context.Background(), p, capabilities[0], "large-integer", json.RawMessage(`{"id":9007199254740993}`), sink); err != nil {
+		t.Fatal(err)
+	}
+	if string(sink.result) != `{"amount":0.123456789012345678901,"id":9007199254740993}` {
+		t.Fatalf("HTTP result lost number precision: %s", sink.result)
+	}
+}
+
+func TestAdapterResolvesSecretsForEveryInvocation(t *testing.T) {
+	var authorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"current":{"temperature_2m":26.5}}`))
+	}))
+	defer server.Close()
+
+	source := strings.ReplaceAll(validSource, "https://api.open-meteo.com", server.URL)
+	source = strings.Replace(source, "type: http\n", "type: http\ncredentials:\n  api-key:\n    secret: weather.api-key\n", 1)
+	source = strings.Replace(source, "    baseURL: "+server.URL, "    baseURL: "+server.URL+"\n    headers:\n      Authorization: 'Bearer {{ secrets.api-key }}'", 1)
+	config, err := Parse([]byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &changingSecretResolver{values: []string{"first-secret", "second-secret"}}
+	adapter := NewAdapterWithResolver(resolver)
+	p := provider.Provider{ID: "api/weather", Protocol: "api", Name: "weather"}
+	if err := adapter.Register(p, config); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current capability.Capability
+	for _, item := range capabilities {
+		if item.Source.UpstreamName == "current" {
+			current = item
+		}
+	}
+	if current.Security.UpstreamAuth != "secret" {
+		t.Fatalf("upstream auth=%q", current.Security.UpstreamAuth)
+	}
+	for i := 0; i < 2; i++ {
+		if err := adapter.Invoke(context.Background(), p, current, "call-secret", json.RawMessage(`{"latitude":31.2}`), &recordingSink{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Join(authorizations, ","); got != "Bearer first-secret,Bearer second-secret" {
+		t.Fatalf("authorizations=%q", got)
+	}
+	if got := strings.Join(resolver.calls, ","); got != "weather.api-key,weather.api-key" {
+		t.Fatalf("resolver calls=%q", got)
+	}
+}
+
+func TestAdapterMissingSecretIsRecognizableAndRedacted(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	defer server.Close()
+	source := strings.ReplaceAll(validSource, "https://api.open-meteo.com", server.URL)
+	source = strings.Replace(source, "type: http\n", "type: http\ncredentials:\n  api-key:\n    secret: weather.api-key\n", 1)
+	source = strings.Replace(source, "    baseURL: "+server.URL, "    baseURL: "+server.URL+"\n    headers:\n      Authorization: 'Bearer {{ secrets.api-key }}'", 1)
 	config, err := Parse([]byte(source))
 	if err != nil {
 		t.Fatal(err)
@@ -124,10 +257,35 @@ func TestAdapterRejectsMissingRequiredVariable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink := &recordingSink{}
-	err = adapter.Invoke(context.Background(), p, capabilities[0], "call-1", json.RawMessage(`{}`), sink)
-	if err == nil || !strings.Contains(err.Error(), "WEATHER_CLIENT") {
-		t.Fatalf("error=%v", err)
+	err = adapter.Invoke(context.Background(), p, capabilities[0], "missing-secret", json.RawMessage(`{"latitude":1}`), &recordingSink{})
+	if !errors.Is(err, secret.ErrMissing) || !strings.Contains(err.Error(), "weather.api-key") || strings.Contains(err.Error(), "Bearer") || called {
+		t.Fatalf("error=%v called=%v", err, called)
+	}
+}
+
+func TestDiscoveryMarksOnlySecretUsingCapabilitiesAsAuthenticated(t *testing.T) {
+	source := strings.Replace(validSource, "type: http\n", "type: http\ncredentials:\n  api-key:\n    secret: weather.api-key\n", 1)
+	source = strings.Replace(source, "        X-Client: ninea", "        Authorization: 'Bearer {{ secrets.api-key }}'", 1)
+	source = strings.Replace(source, "workflows:\n", "  public:\n    service: forecast\n    method: GET\n    path: /v1/public\n    inputSchema: {}\n    outputSchema: {}\nworkflows:\n", 1)
+	config, err := Parse([]byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter()
+	p := provider.Provider{ID: "api/weather", Protocol: "api", Name: "weather"}
+	if err := adapter.Register(p, config); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := make(map[string]string, len(capabilities))
+	for _, item := range capabilities {
+		auth[item.Source.UpstreamName] = item.Security.UpstreamAuth
+	}
+	if auth["current"] != "secret" || auth["report"] != "secret" || auth["public"] != "none" {
+		t.Fatalf("upstream auth=%#v", auth)
 	}
 }
 
@@ -168,6 +326,28 @@ func TestDiscoveryTreatsLowercaseGETAsReadOnly(t *testing.T) {
 	}
 	for _, item := range capabilities {
 		if item.Security.RequiresApproval != "never" {
+			t.Fatalf("%s approval=%q", item.ID, item.Security.RequiresApproval)
+		}
+	}
+}
+
+func TestDiscoveryCanRequireApprovalForSideEffectingGET(t *testing.T) {
+	source := strings.Replace(validSource, "    method: GET\n", "    method: GET\n    requiresApproval: true\n", 1)
+	config, err := Parse([]byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter()
+	p := provider.Provider{ID: "api/weather", Protocol: "api", Name: "weather"}
+	if err := adapter.Register(p, config); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := adapter.Discover(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range capabilities {
+		if item.Security.RequiresApproval != "always" {
 			t.Fatalf("%s approval=%q", item.ID, item.Security.RequiresApproval)
 		}
 	}
@@ -217,6 +397,32 @@ func TestAdapterRunsBoundedExecutableHook(t *testing.T) {
 	}
 }
 
+func TestExecutableHookPreservesLargeIntegers(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WEATHER_CLIENT", "hook-client")
+	t.Setenv("NINEA_DECLARATIVE_HOOK_HELPER", "1")
+	t.Setenv("NINEA_DECLARATIVE_HOOK_LARGE_INTEGER", "1")
+	result, err := runExecutableHook(context.Background(), ExecHook{
+		Command:        []string{executable, "-test.run=^TestDeclarativeHookHelperProcess$"},
+		Env:            []string{"WEATHER_CLIENT", "NINEA_DECLARATIVE_HOOK_HELPER", "NINEA_DECLARATIVE_HOOK_LARGE_INTEGER"},
+		Timeout:        "2s",
+		MaxOutputBytes: 1024,
+	}, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"id":9007199254740993}` {
+		t.Fatalf("hook result lost integer precision: %s", raw)
+	}
+}
+
 func TestExecutableHookAdmissionIsBounded(t *testing.T) {
 	for i := 0; i < cap(executableHookSlots); i++ {
 		executableHookSlots <- struct{}{}
@@ -252,6 +458,13 @@ func TestExecutableHookFailureRedactsStderr(t *testing.T) {
 func TestJQFailureRedactsInputValues(t *testing.T) {
 	_, err := runJQ(".value.foo", map[string]any{"value": "transform-secret"})
 	if err == nil || strings.Contains(err.Error(), "transform-secret") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestJQRejectsArithmeticThatWouldLosePrecision(t *testing.T) {
+	_, err := runJQ(".amount + 1", map[string]any{"amount": json.Number("0.123456789012345678901")})
+	if err == nil || !strings.Contains(err.Error(), "precision-sensitive") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -341,7 +554,7 @@ func TestAdapterRemovesHeadersCaseInsensitively(t *testing.T) {
 	defer server.Close()
 	source := strings.ReplaceAll(validSource, "https://api.open-meteo.com", server.URL)
 	source = strings.Replace(source, "    baseURL: "+server.URL, "    baseURL: "+server.URL+"\n    headers:\n      Authorization: secret", 1)
-	source = strings.Replace(source, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - transform:\n            language: jq\n            expression: '.headers = {\"authorization\": \"secret\"}'\n        - removeHeaders: [authorization]", 1)
+	source = strings.Replace(source, "beforeRequest:\n        - setHeaders:\n            X-Trace: ninea", "beforeRequest:\n        - transform:\n            language: jq\n            expression: '.headers = {\"authorization\": \"secret\"}'\n        - removeHeaders: [authorization]", 1)
 	config, err := Parse([]byte(source))
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +617,7 @@ func TestAdapterRejectsNonObjectQueryFromHook(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer server.Close()
 	source := strings.ReplaceAll(validSource, "https://api.open-meteo.com", server.URL)
-	source = strings.Replace(source, "beforeRequest:\n        - setHeaders:\n            X-Trace: \"{{ vars.client }}\"", "beforeRequest:\n        - transform:\n            language: jq\n            expression: '.query = \"invalid\"'", 1)
+	source = strings.Replace(source, "beforeRequest:\n        - setHeaders:\n            X-Trace: ninea", "beforeRequest:\n        - transform:\n            language: jq\n            expression: '.query = \"invalid\"'", 1)
 	config, err := Parse([]byte(source))
 	if err != nil {
 		t.Fatal(err)

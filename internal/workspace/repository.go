@@ -14,13 +14,13 @@ type Repository struct{ db *sql.DB }
 func NewRepository(db *sql.DB) *Repository { return &Repository{db: db} }
 
 func (r *Repository) PutWorkspace(ctx context.Context, w Workspace) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO workspaces(id,root,skills_root,policy,backend,state,fallback_reason,format,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET root=excluded.root,skills_root=excluded.skills_root,policy=excluded.policy,backend=excluded.backend,state=excluded.state,fallback_reason=excluded.fallback_reason,format=excluded.format,updated_at=excluded.updated_at`, w.ID, w.Root, w.SkillsRoot, w.Policy, w.Backend, w.State, w.FallbackReason, w.Format, w.CreatedAt.Format(time.RFC3339Nano), w.UpdatedAt.Format(time.RFC3339Nano))
+	_, err := r.db.ExecContext(ctx, `INSERT INTO workspaces(id,root,skills_root,policy,backend,state,format,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET root=excluded.root,skills_root=excluded.skills_root,policy=excluded.policy,backend=excluded.backend,state=excluded.state,format=excluded.format,updated_at=excluded.updated_at`, w.ID, w.Root, w.SkillsRoot, w.Policy, w.Backend, w.State, w.Format, w.CreatedAt.Format(time.RFC3339Nano), w.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
 func scanWorkspace(row interface{ Scan(...any) error }) (Workspace, error) {
 	var w Workspace
 	var created, updated string
-	err := row.Scan(&w.ID, &w.Root, &w.SkillsRoot, &w.Policy, &w.Backend, &w.State, &w.FallbackReason, &w.Format, &created, &updated)
+	err := row.Scan(&w.ID, &w.Root, &w.SkillsRoot, &w.Policy, &w.Backend, &w.State, &w.Format, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return w, ErrNotFound
 	}
@@ -35,17 +35,16 @@ func scanWorkspace(row interface{ Scan(...any) error }) (Workspace, error) {
 	return w, err
 }
 func (r *Repository) GetWorkspaceByRoot(ctx context.Context, root string) (Workspace, error) {
-	return scanWorkspace(r.db.QueryRowContext(ctx, `SELECT id,root,skills_root,policy,backend,state,fallback_reason,format,created_at,updated_at FROM workspaces WHERE root=?`, root))
+	return scanWorkspace(r.db.QueryRowContext(ctx, `SELECT id,root,skills_root,policy,backend,state,format,created_at,updated_at FROM workspaces WHERE root=?`, root))
 }
 func (r *Repository) GetWorkspace(ctx context.Context, id string) (Workspace, error) {
-	return scanWorkspace(r.db.QueryRowContext(ctx, `SELECT id,root,skills_root,policy,backend,state,fallback_reason,format,created_at,updated_at FROM workspaces WHERE id=?`, id))
+	return scanWorkspace(r.db.QueryRowContext(ctx, `SELECT id,root,skills_root,policy,backend,state,format,created_at,updated_at FROM workspaces WHERE id=?`, id))
 }
 func (r *Repository) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,root,skills_root,policy,backend,state,fallback_reason,format,created_at,updated_at FROM workspaces ORDER BY root`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,root,skills_root,policy,backend,state,format,created_at,updated_at FROM workspaces ORDER BY root`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []Workspace
 	for rows.Next() {
 		w, e := scanWorkspace(rows)
@@ -54,7 +53,14 @@ func (r *Repository) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 		}
 		out = append(out, w)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 func (r *Repository) DeleteWorkspace(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM workspaces WHERE id=?`, id)
@@ -69,7 +75,6 @@ func (r *Repository) ListManagedSkills(ctx context.Context, workspaceID string) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []ManagedSkill
 	for rows.Next() {
 		var s ManagedSkill
@@ -83,7 +88,14 @@ func (r *Repository) ListManagedSkills(ctx context.Context, workspaceID string) 
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 func (r *Repository) DeleteManagedSkill(ctx context.Context, workspaceID, logicalID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM managed_skills WHERE workspace_id=? AND logical_id=?`, workspaceID, logicalID)

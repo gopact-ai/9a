@@ -5,142 +5,96 @@
 Email `contact@gopact-ai.org` with subject `[SECURITY][9a]`.
 
 Do not open a public Issue or Discussion for a suspected vulnerability. Do not
-include live credentials, provider secrets, sensitive prompts, or tool results
-in the initial report.
+include live credentials, sensitive prompts, or upstream results in the first
+report.
 
-## Authentication and authorization
+## Side-effect boundary
 
-- `9a daemon` listens on a local Unix socket and changes the socket mode to
-  `0600`. Every request still requires a bearer token; possession of the socket
-  path is not authentication.
-- Tokens identify callers. NineA stores SHA-256 token digests, not plaintext
-  bearer tokens.
-- The automatic first start generates an administrator token in the private
-  local state directory with mode `0600`. An explicit
-  `NINEA_BOOTSTRAP_TOKEN` overrides generation only when the token store is
-  empty; later starts reject it.
-- Capability access is default-deny. `read` controls search and projection;
-  `invoke` independently controls execution. Adapter registration, provider
-  registration, token creation, and ACL grants require `admin`.
-- Persistent call records and events are visible only to the call owner or an
-  administrator.
+`9a search`, `9a status`, and read-only `9a doctor` operations do not contact an
+upstream system. `9a run` is the explicit boundary that may cause an upstream
+side effect.
 
-Use a distinct token for every agent and grant only the capabilities and
-permissions it needs. Keep the state database, token files, socket parent
-directory, projected Skill directories, and daemon logs private with operating
-system permissions.
+Capabilities that may mutate upstream state require an approval token. HTTP
+methods other than GET and capabilities with executable hooks always require
+one; a side-effecting GET must declare `requiresApproval: true`; and all MCP
+and A2A capabilities require one. NineA does not trust MCP
+`readOnlyHint` as an authorization boundary. Without a valid token, NineA
+creates no call and sends nothing upstream. The preflight token binds the
+selected capability revision and exact input. It is single-use, expires after
+10 minutes, and exists only in daemon memory, so a daemon restart invalidates
+it. Review both bound values before using it; any change requires a new
+preflight and explicit approval.
 
-## Provider and adapter credentials
+NineA runs with the current operating-system account's permissions. It is a
+local capability runtime, not a sandbox or a multi-tenant isolation boundary.
 
-`NINEA_TOKEN` authenticates a client to NineA. It is not an upstream provider
-credential. `9a daemon` removes `NINEA_TOKEN` and `NINEA_BOOTSTRAP_TOKEN` from its
-environment after startup, and the MCP and executable adapter launchers also
-strip both variables from child environments.
+## Local runtime and state
 
-MCP servers and executable adapters inherit other daemon environment variables.
-Store provider credentials in protocol-specific variables or an external
-secret store:
+The CLI starts a private local runtime when needed. Its transport and state are
+limited to the current operating-system account. The default state directory
+is `$HOME/.local/state/ninea` with mode `0700`; sensitive runtime files use mode
+`0600`.
 
-- A2A provider `research-agent` uses
-  `NINEA_A2A_TOKEN_RESEARCH_AGENT` when its Agent Card selects bearer auth.
-- The generic HTTP provider `orders-api` uses
-  `NINEA_HTTP_TOKEN_ORDERS_API` for manifest operations configured with
-  `"auth":"bearer"`.
+Do not share the local state directory. NineA is not a security boundary
+against another process running as the same operating-system account.
 
-Declarative Skills name environment variables under `variables` and resolve
-them only at invocation time. Templates such as `{{ vars.api-token }}` can set
-service or request headers without embedding the value in YAML. The projected
-`references/source.yaml` retains the environment variable name, not its value.
+## Manifest and network validation
 
-The generic HTTP adapter never sends an available token for an operation marked
-`none`, and it does not forward caller headers. Do not put credentials in
-provider descriptions, manifests committed to source control, Capability
-metadata, schemas, projected Skills, or command arguments.
+Integration manifests are untrusted input. NineA rejects unknown fields,
+duplicate YAML keys, aliases, multiple documents, unsafe paths, malformed
+templates, invalid JSON Schemas, and sources larger than 8 MiB.
 
-## Local process trust
+Remote HTTP and A2A endpoints require HTTPS. Plain HTTP is accepted only for
+loopback development endpoints. Service URLs cannot contain credentials,
+queries, or fragments. HTTP redirects are limited and must remain on the
+original origin. Requests use bounded timeouts, and responses are size-limited.
 
-MCP servers and registered executable adapters are trusted local code. They run
-with the daemon user's OS privileges and can read environment variables and
-files available to that user. NineA does not sandbox them.
+Input is validated against the capability's JSON Schema before the request.
+Output is validated before a call is marked complete. External JSON Schema
+references are rejected so validation cannot fetch remote documents.
 
-Only administrators can register adapters. Registration requires a reviewed,
-executable regular file at an absolute path; NineA resolves symlinks and stores
-the canonical path. The file must remain trusted and unchanged after
-registration. Use a dedicated OS account, container, or another process sandbox
-when an integration needs a stronger boundary.
+## Credentials
 
-The built-in MCP adapter limits the daemon to 64 active stdio sessions across
-all providers and reserves capacity before starting a server process. Discovery,
-synchronous invocation, and persistent calls share this limit. Requests beyond
-it are rejected without spawning another child process. The synchronous API
-reports the rejection as `request_failed`; an already-created persistent call
-records `failed` with code `resource_exhausted`.
+Do not put secret values in a manifest. A manifest may declare an alias and a
+reference such as `private-api.api-token`, then use
+`{{ secrets.api-token }}` in request fields.
 
-## Network boundaries
+`9a secret set <integration>.<key>` reads the value from a hidden terminal
+prompt or stdin and stores it in the operating system credential store (system
+keyring). Values are scoped to the current workspace, so identical references
+in two workspaces are independent. The local database stores only scoped
+references and timestamps. `secret list`, status output, errors, and logs must
+never expose values.
 
-The built-in declarative and A2A adapters and the generic HTTP adapter apply the
-following network rules:
+If an A2A Agent Card requires bearer authentication, declare one credential in
+the A2A manifest and store it with `9a secret set`; do not pass it through the
+process environment. See the [A2A manifest reference](reference/manifest.md#a2a).
 
-- non-loopback providers require HTTPS; cleartext HTTP is limited to loopback
-  development endpoints;
-- redirects are limited to three, must remain on the original origin, and may
-  not downgrade HTTPS;
-- endpoints cannot contain embedded credentials, and operation paths cannot
-  change scheme or host;
-- requests, responses, protocol messages, schemas, metadata, and events are
-  bounded; upstream requests use timeouts;
-- returned error messages are sanitized instead of echoing URLs, response
-  bodies, or tokens.
+## Local executables
 
-Declarative YAML is strictly decoded and rejects unknown fields, duplicate
-keys, aliases, multiple documents, malformed templates, remote cleartext HTTP,
-unsafe paths, invalid references, and oversized source files before
-installation. HTTP response bodies are bounded at 8 MiB.
+An MCP integration and an executable hook run local code with the current OS
+account's permissions. Review and sandbox executables when that trust level is
+too broad.
 
-Declarative executable hooks are disabled by default. Enabling them is an
-explicit source-level trust decision. A hook command is an absolute argument
-array executed without shell interpolation; it receives only allowlisted
-environment variables and bounded JSON over stdin/stdout. NineA caps hook
-timeouts and output, places the process in its own group, and kills that group
-on cancellation or overflow. A global 32-process admission limit rejects excess
-hooks before launch. Hook failures returned through the API do not include
-stderr. Hook code is still trusted code with the daemon user's privileges and
-is not a sandbox.
+MCP manifests accept one absolute executable without shell arguments. NineA
+passes a minimal environment for executable lookup, temporary files, locale,
+and TLS certificates; it does not forward cloud, source-control, or NineA
+credential variables. MCP manifests cannot inject additional variables.
+Executable hooks require `security.allowExecutableHooks: true`, an absolute
+executable path, and an explicit environment-variable allowlist. NineA invokes
+the argument array without a shell and bounds execution time and output, but an
+allowed environment variable is still visible to that process.
 
-A2A Agent Card discovery does not send an operation bearer token. The adapter
-accepts compatible public or HTTP Bearer security requirements and applies the
-effective card or skill policy to each operation.
+## Persisted and workspace data
 
-## Untrusted data and persistence
+Accepted `run` requests create persistent call records. Inputs, results,
+events, runtime metadata, and logs may contain sensitive business data. The
+local state database is not encrypted at rest; protect the state directory and
+apply external disk encryption when required. NineA bounds retained call count
+and bytes, pruning the oldest terminal calls when admitting new work; active
+calls are never pruned.
 
-Provider descriptions, schemas, events, artifacts, and results are untrusted
-data. NineA validates and bounds adapter messages and generated Skill metadata,
-but consuming agents must still treat upstream text as data rather than trusted
-instructions.
-
-Call inputs, states, results, events, artifacts, adapter registrations,
-providers, ACLs, and the Catalog are stored in SQLite. The current 0.x release
-does not encrypt the database at rest. Logs and adapter stderr may also contain
-provider diagnostics, so protect and review them.
-
-Persistent call admission is capped at 8 active calls, 1,000 retained calls,
-and 256 MiB of retained call data per identity. Database-wide limits are 64
-active calls, 10,000 retained calls, and 2 GiB. Retained data includes inputs,
-results, and event envelopes. Terminal calls release active capacity but remain
-charged to retained count and bytes. There is no automatic retention cleanup or
-call deletion API, so monitor these limits and archive or replace the state
-database offline before retained capacity is exhausted.
-
-Reading projected files has no provider side effect. NineA never mounts over or
-deletes a user-owned Skill directory. FUSE projections reject write, truncate,
-rename, delete, chmod, and xattr mutation with read-only filesystem semantics.
-
-The portable directory backend uses read-only modes, atomic replacement, and a
-versioned ownership manifest containing path, mode, size, and SHA-256 for every
-file. It detects and repairs drift but is not a security boundary against the
-same OS account or root, which can change its own permissions. Require the FUSE
-backend when kernel-enforced immutability matters.
-
-Running a projected invocation command crosses back into the authenticated
-NineA runtime and requires `invoke` permission. `detach` removes only registry-
-verified managed views and preserves providers, sources, ACLs, and call data.
+The canonical manifest is `.9a/integrations/<name>.yaml`. The shared
+`.agents/skills/using-ninea` gateway is derived discovery state and is not a
+security boundary. Processes running as the same OS account can inspect or
+modify workspace files.

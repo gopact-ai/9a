@@ -53,17 +53,13 @@ func TestResolveWorkspace(t *testing.T) {
 	t.Run("managed skills directory resolves to owning workspace", func(t *testing.T) {
 		root := t.TempDir()
 		root, _ = filepath.EvalSymlinks(root)
-		for _, path := range []string{
-			filepath.Join(root, ".agents", "skills"),
-			filepath.Join(root, ".claude", "skills", "using-ninea", "references"),
-		} {
-			if err := os.MkdirAll(path, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			got, err := Resolve("", path)
-			if err != nil || got != root {
-				t.Fatalf("Resolve(%q)=%q err=%v want %q", path, got, err, root)
-			}
+		path := filepath.Join(root, ".agents", "skills", "using-ninea", "references")
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Resolve("", path)
+		if err != nil || got != root {
+			t.Fatalf("Resolve(%q)=%q err=%v want %q", path, got, err, root)
 		}
 	})
 
@@ -84,7 +80,7 @@ func TestResolveWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("managed skills directory wins over nested skill repository", func(t *testing.T) {
+	t.Run("unrelated skill repository resolves to itself", func(t *testing.T) {
 		owner := t.TempDir()
 		skill := filepath.Join(owner, ".agents", "skills", "custom")
 		if err := os.MkdirAll(skill, 0o755); err != nil {
@@ -97,14 +93,14 @@ func TestResolveWorkspace(t *testing.T) {
 		if err := os.Mkdir(cwd, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		owner, _ = filepath.EvalSymlinks(owner)
+		skill, _ = filepath.EvalSymlinks(skill)
 		got, err := Resolve("", cwd)
-		if err != nil || got != owner {
-			t.Fatalf("Resolve()=%q err=%v want %q", got, err, owner)
+		if err != nil || got != skill {
+			t.Fatalf("Resolve()=%q err=%v want %q", got, err, skill)
 		}
 	})
 
-	t.Run("symlinked managed skill resolves to the logical owner", func(t *testing.T) {
+	t.Run("symlinked unrelated skill resolves to its repository", func(t *testing.T) {
 		owner := t.TempDir()
 		source := t.TempDir()
 		if out, err := exec.Command("git", "-C", source, "init", "-q").CombinedOutput(); err != nil {
@@ -122,10 +118,10 @@ func TestResolveWorkspace(t *testing.T) {
 		if err := os.Symlink(sourceSkill, filepath.Join(skillsRoot, "custom")); err != nil {
 			t.Fatal(err)
 		}
-		owner, _ = filepath.EvalSymlinks(owner)
+		source, _ = filepath.EvalSymlinks(source)
 		got, err := Resolve("", filepath.Join(skillsRoot, "custom", cwdSuffix))
-		if err != nil || got != owner {
-			t.Fatalf("Resolve()=%q err=%v want %q", got, err, owner)
+		if err != nil || got != source {
+			t.Fatalf("Resolve()=%q err=%v want %q", got, err, source)
 		}
 	})
 

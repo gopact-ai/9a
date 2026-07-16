@@ -90,6 +90,9 @@ func (b *Backend) publish(ctx context.Context, root string, a mount.Attachment, 
 	if filepath.Join(root, s.Name) != a.Target {
 		return ErrConflict
 	}
+	if err := ensureRealRoot(root); err != nil {
+		return err
+	}
 	if info, err := os.Lstat(a.Target); err == nil {
 		if !info.IsDir() {
 			return ErrConflict
@@ -99,9 +102,6 @@ func (b *Backend) publish(ctx context.Context, root string, a mount.Attachment, 
 			return ErrConflict
 		}
 	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
 	stage, err := os.MkdirTemp(root, ".ninea-stage-")
@@ -182,6 +182,25 @@ func (b *Backend) publish(ctx context.Context, root string, a mount.Attachment, 
 		return err
 	}
 	return os.Chmod(a.Target, 0o555)
+}
+
+func ensureRealRoot(root string) error {
+	for _, path := range []string{filepath.Dir(root), root} {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.Mkdir(path, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			info, err = os.Lstat(path)
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return ErrConflict
+		}
+	}
+	return nil
 }
 
 func (b *Backend) Inspect(ctx context.Context, a mount.Attachment, s mount.Snapshot) (mount.Inspection, error) {
@@ -279,17 +298,4 @@ func (b *Backend) Detach(ctx context.Context, a mount.Attachment) error {
 		return err
 	}
 	return os.RemoveAll(a.Target)
-}
-
-// Publish and Remove preserve the v0 API while callers migrate to managed attachments.
-func (b *Backend) Publish(ctx context.Context, root string, s mount.Skill) error {
-	snap, err := mount.NewSnapshot(s.CapabilityID, s.Name, fmt.Sprintf("%d", s.Revision), s.Revision, s.Files)
-	if err != nil {
-		return err
-	}
-	_, err = b.Attach(ctx, root, "legacy", snap)
-	return err
-}
-func (b *Backend) Remove(ctx context.Context, root string, s mount.Skill) error {
-	return b.Detach(ctx, mount.Attachment{WorkspaceID: "legacy", LogicalID: s.CapabilityID, Target: filepath.Join(root, s.Name)})
 }

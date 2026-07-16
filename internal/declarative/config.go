@@ -12,10 +12,15 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	adapterreg "github.com/gopact-ai/9a/internal/adapter"
+	"github.com/gopact-ai/9a/internal/jsoncontract"
+	"github.com/gopact-ai/9a/internal/jsonvalue"
+	"github.com/gopact-ai/9a/internal/secret"
 	"github.com/itchyny/gojq"
 	"gopkg.in/yaml.v3"
 )
@@ -29,33 +34,23 @@ var (
 )
 
 type Config struct {
-	APIVersion string               `yaml:"apiVersion"`
-	Kind       string               `yaml:"kind"`
-	Metadata   Metadata             `yaml:"metadata"`
-	Projection Projection           `yaml:"projection,omitempty"`
-	Variables  map[string]Variable  `yaml:"variables,omitempty"`
-	Services   map[string]Service   `yaml:"services"`
-	Operations map[string]Operation `yaml:"operations"`
-	Workflows  map[string]Workflow  `yaml:"workflows,omitempty"`
-	Security   Security             `yaml:"security,omitempty"`
-	Digest     string               `yaml:"-"`
-	Source     []byte               `yaml:"-"`
+	Version      int                   `yaml:"version"`
+	Name         string                `yaml:"name"`
+	Description  string                `yaml:"description,omitempty"`
+	Type         string                `yaml:"type"`
+	Executable   string                `yaml:"executable,omitempty"`
+	URL          string                `yaml:"url,omitempty"`
+	Credentials  map[string]Credential `yaml:"credentials,omitempty"`
+	Services     map[string]Service    `yaml:"services"`
+	Capabilities map[string]Operation  `yaml:"capabilities"`
+	Workflows    map[string]Workflow   `yaml:"workflows,omitempty"`
+	Security     Security              `yaml:"security,omitempty"`
+	Digest       string                `yaml:"-"`
+	Source       []byte                `yaml:"-"`
 }
 
-type Metadata struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description,omitempty"`
-}
-
-type Projection struct {
-	Targets []string `yaml:"targets,omitempty"`
-}
-
-type Variable struct {
-	FromEnv   string `yaml:"fromEnv,omitempty"`
-	Default   string `yaml:"default,omitempty"`
-	Sensitive bool   `yaml:"sensitive,omitempty"`
-	Required  bool   `yaml:"required,omitempty"`
+type Credential struct {
+	Secret string `yaml:"secret"`
 }
 
 type Service struct {
@@ -65,14 +60,15 @@ type Service struct {
 }
 
 type Operation struct {
-	Description  string         `yaml:"description,omitempty"`
-	Service      string         `yaml:"service"`
-	Method       string         `yaml:"method"`
-	Path         string         `yaml:"path"`
-	Request      RequestMapping `yaml:"request,omitempty"`
-	InputSchema  map[string]any `yaml:"inputSchema,omitempty"`
-	OutputSchema map[string]any `yaml:"outputSchema,omitempty"`
-	Hooks        Hooks          `yaml:"hooks,omitempty"`
+	Description      string         `yaml:"description,omitempty"`
+	Service          string         `yaml:"service"`
+	Method           string         `yaml:"method"`
+	Path             string         `yaml:"path"`
+	RequiresApproval bool           `yaml:"requiresApproval,omitempty"`
+	Request          RequestMapping `yaml:"request,omitempty"`
+	InputSchema      map[string]any `yaml:"inputSchema,omitempty"`
+	OutputSchema     map[string]any `yaml:"outputSchema,omitempty"`
+	Hooks            Hooks          `yaml:"hooks,omitempty"`
 }
 
 type RequestMapping struct {
@@ -156,6 +152,20 @@ func Parse(source []byte) (*Config, error) {
 	if err := strict.Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode YAML: %w", err)
 	}
+	exact, err := yamlJSONValue(&document)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(exact)
+	if err != nil {
+		return nil, fmt.Errorf("normalize YAML: %w", err)
+	}
+	if err := jsonvalue.Decode(raw, &config); err != nil {
+		return nil, fmt.Errorf("normalize YAML: %w", err)
+	}
+	if err := validateFieldsForType(&document, config.Type); err != nil {
+		return nil, err
+	}
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -167,6 +177,86 @@ func Parse(source []byte) (*Config, error) {
 	config.Digest = hex.EncodeToString(digest[:])
 	config.Source = append([]byte(nil), source...)
 	return &config, nil
+}
+
+func yamlJSONValue(node *yaml.Node) (any, error) {
+	switch node.Kind {
+	case yaml.DocumentNode:
+		if len(node.Content) != 1 {
+			return nil, errors.New("source must contain exactly one YAML document")
+		}
+		return yamlJSONValue(node.Content[0])
+	case yaml.MappingNode:
+		value := make(map[string]any, len(node.Content)/2)
+		for i := 0; i < len(node.Content); i += 2 {
+			item, err := yamlJSONValue(node.Content[i+1])
+			if err != nil {
+				return nil, err
+			}
+			value[node.Content[i].Value] = item
+		}
+		return value, nil
+	case yaml.SequenceNode:
+		value := make([]any, len(node.Content))
+		for i, child := range node.Content {
+			item, err := yamlJSONValue(child)
+			if err != nil {
+				return nil, err
+			}
+			value[i] = item
+		}
+		return value, nil
+	case yaml.ScalarNode:
+		switch node.Tag {
+		case "!!null":
+			return nil, nil
+		case "!!bool":
+			value, err := strconv.ParseBool(node.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid boolean at line %d", node.Line)
+			}
+			return value, nil
+		case "!!int", "!!float":
+			var value any
+			if err := jsonvalue.Decode([]byte(node.Value), &value); err != nil {
+				return nil, fmt.Errorf("number at line %d must use JSON syntax", node.Line)
+			}
+			if _, ok := value.(json.Number); !ok {
+				return nil, fmt.Errorf("number at line %d is invalid", node.Line)
+			}
+			return value, nil
+		default:
+			return node.Value, nil
+		}
+	default:
+		return nil, fmt.Errorf("unsupported YAML value at line %d", node.Line)
+	}
+}
+
+func validateFieldsForType(document *yaml.Node, integrationType string) error {
+	allowed := map[string]map[string]struct{}{
+		"http": fieldSet("version", "name", "description", "type", "credentials", "services", "capabilities", "workflows", "security"),
+		"mcp":  fieldSet("version", "name", "description", "type", "executable"),
+		"a2a":  fieldSet("version", "name", "description", "type", "url", "credentials"),
+	}[integrationType]
+	if allowed == nil || len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(document.Content[0].Content); i += 2 {
+		field := document.Content[0].Content[i]
+		if _, ok := allowed[field.Value]; !ok {
+			return fmt.Errorf("field %q is not valid for integration type %q at line %d", field.Value, integrationType, field.Line)
+		}
+	}
+	return nil
+}
+
+func fieldSet(fields ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		set[field] = struct{}{}
+	}
+	return set
 }
 
 func validateYAMLNode(node *yaml.Node) error {
@@ -194,42 +284,47 @@ func validateYAMLNode(node *yaml.Node) error {
 	return nil
 }
 
-func (c *Config) SkillRoot() string {
-	if len(c.Projection.Targets) > 0 {
-		return c.Projection.Targets[0]
-	}
-	return ".agents/skills"
-}
-
 func (c *Config) Validate() error {
-	if c.APIVersion != "9a.dev/v1alpha1" {
-		return fmt.Errorf("apiVersion must be 9a.dev/v1alpha1")
+	if c.Version != 1 {
+		return errors.New("version must be 1")
 	}
-	if c.Kind != "Skill" {
-		return fmt.Errorf("kind must be Skill")
-	}
-	if err := validateName("metadata.name", c.Metadata.Name); err != nil {
+	if err := validateName("name", c.Name); err != nil {
 		return err
 	}
-	if len(c.Projection.Targets) > 1 {
-		return errors.New("projection.targets currently supports one target")
-	}
-	for _, target := range c.Projection.Targets {
-		clean := filepath.Clean(target)
-		if filepath.IsAbs(target) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("projection target %q must be a relative directory", target)
-		}
-	}
-	for name, variable := range c.Variables {
-		if err := validateName("variable", name); err != nil {
+	for alias, credential := range c.Credentials {
+		if err := validateName("credential", alias); err != nil {
 			return err
 		}
-		if variable.FromEnv == "" && variable.Default == "" {
-			return fmt.Errorf("variable %q requires fromEnv or default", name)
+		if err := secret.ValidateReference(credential.Secret); err != nil {
+			return fmt.Errorf("credential %q: %w", alias, err)
 		}
-		if variable.FromEnv != "" && !envPattern.MatchString(variable.FromEnv) {
-			return fmt.Errorf("variable %q has invalid fromEnv %q", name, variable.FromEnv)
+		integration, _, _ := strings.Cut(credential.Secret, ".")
+		if integration != c.Name {
+			return fmt.Errorf("credential %q must reference integration %q", alias, c.Name)
 		}
+	}
+	switch c.Type {
+	case "mcp":
+		if len(c.Credentials) != 0 {
+			return errors.New("MCP integrations do not accept credentials")
+		}
+		executable, err := adapterreg.ValidateExecutable(c.Executable)
+		if err != nil {
+			return fmt.Errorf("executable: %w", err)
+		}
+		c.Executable = executable
+		return nil
+	case "a2a":
+		if err := validateEndpointURL("url", c.URL); err != nil {
+			return err
+		}
+		if len(c.Credentials) > 1 {
+			return errors.New("A2A integrations accept at most one bearer credential")
+		}
+		return nil
+	case "http":
+	default:
+		return errors.New("type must be http, mcp, or a2a")
 	}
 	if len(c.Services) == 0 {
 		return errors.New("at least one service is required")
@@ -238,7 +333,7 @@ func (c *Config) Validate() error {
 		if err := validateName("service", name); err != nil {
 			return err
 		}
-		if err := validateBaseURL(service.BaseURL); err != nil {
+		if err := validateEndpointURL("baseURL", service.BaseURL); err != nil {
 			return fmt.Errorf("service %q: %w", name, err)
 		}
 		if service.Timeout != "" {
@@ -253,38 +348,50 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("service %q headers: %w", name, err)
 		}
 	}
-	if len(c.Operations) == 0 {
-		return errors.New("at least one operation is required")
+	if len(c.Capabilities) == 0 {
+		return errors.New("at least one capability is required")
 	}
-	for name, operation := range c.Operations {
-		if err := validateName("operation", name); err != nil {
+	for name, operation := range c.Capabilities {
+		if err := validateName("capability", name); err != nil {
 			return err
 		}
 		if _, ok := c.Services[operation.Service]; !ok {
-			return fmt.Errorf("operation %q references unknown service %q", name, operation.Service)
+			return fmt.Errorf("capability %q references unknown service %q", name, operation.Service)
 		}
 		if !allowedMethod(operation.Method) {
-			return fmt.Errorf("operation %q has unsupported method %q", name, operation.Method)
+			return fmt.Errorf("capability %q has unsupported method %q", name, operation.Method)
 		}
 		if err := validateOperationPath(operation.Path); err != nil {
-			return fmt.Errorf("operation %q: %w", name, err)
+			return fmt.Errorf("capability %q: %w", name, err)
 		}
 		if err := c.validateTemplates(operation.Request, nil); err != nil {
-			return fmt.Errorf("operation %q request: %w", name, err)
+			return fmt.Errorf("capability %q request: %w", name, err)
 		}
 		if err := validateHeaderMap(operation.Request.Headers); err != nil {
-			return fmt.Errorf("operation %q headers: %w", name, err)
+			return fmt.Errorf("capability %q headers: %w", name, err)
 		}
 		if err := c.validateHooks(operation.Hooks); err != nil {
-			return fmt.Errorf("operation %q: %w", name, err)
+			return fmt.Errorf("capability %q: %w", name, err)
+		}
+		if operation.InputSchema == nil {
+			return fmt.Errorf("capability %q inputSchema is required", name)
+		}
+		if err := jsoncontract.Compile(operation.InputSchema); err != nil {
+			return fmt.Errorf("capability %q input schema: %w", name, err)
+		}
+		if operation.OutputSchema == nil {
+			return fmt.Errorf("capability %q outputSchema is required", name)
+		}
+		if err := jsoncontract.Compile(operation.OutputSchema); err != nil {
+			return fmt.Errorf("capability %q output schema: %w", name, err)
 		}
 	}
 	for name, workflow := range c.Workflows {
 		if err := validateName("workflow", name); err != nil {
 			return err
 		}
-		if _, exists := c.Operations[name]; exists {
-			return fmt.Errorf("workflow %q conflicts with an operation of the same name", name)
+		if _, exists := c.Capabilities[name]; exists {
+			return fmt.Errorf("workflow %q conflicts with a capability of the same name", name)
 		}
 		if len(workflow.Steps) == 0 {
 			return fmt.Errorf("workflow %q requires at least one step", name)
@@ -297,8 +404,8 @@ func (c *Config) Validate() error {
 			if _, exists := prior[step.ID]; exists {
 				return fmt.Errorf("workflow %q has duplicate step %q", name, step.ID)
 			}
-			if _, ok := c.Operations[step.Use]; !ok {
-				return fmt.Errorf("workflow %q step %q references unknown operation %q", name, step.ID, step.Use)
+			if _, ok := c.Capabilities[step.Use]; !ok {
+				return fmt.Errorf("workflow %q step %q references unknown capability %q", name, step.ID, step.Use)
 			}
 			if err := c.validateTemplates(step.Input, prior); err != nil {
 				return fmt.Errorf("workflow %q step %q: %w", name, step.ID, err)
@@ -309,6 +416,18 @@ func (c *Config) Validate() error {
 			if err := validateTransform(workflow.Output); err != nil {
 				return fmt.Errorf("workflow %q output: %w", name, err)
 			}
+		}
+		if workflow.InputSchema == nil {
+			return fmt.Errorf("workflow %q inputSchema is required", name)
+		}
+		if err := jsoncontract.Compile(workflow.InputSchema); err != nil {
+			return fmt.Errorf("workflow %q input schema: %w", name, err)
+		}
+		if workflow.OutputSchema == nil {
+			return fmt.Errorf("workflow %q outputSchema is required", name)
+		}
+		if err := jsoncontract.Compile(workflow.OutputSchema); err != nil {
+			return fmt.Errorf("workflow %q output schema: %w", name, err)
 		}
 	}
 	return nil
@@ -321,25 +440,25 @@ func validateName(field, value string) error {
 	return nil
 }
 
-func validateBaseURL(raw string) error {
+func validateEndpointURL(field, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("baseURL %q is invalid", raw)
+		return fmt.Errorf("%s %q is invalid", field, raw)
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("baseURL cannot contain credentials, query, or fragment")
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
+		return fmt.Errorf("%s cannot contain credentials, query, or fragment", field)
 	}
 	if u.Scheme == "https" {
 		return nil
 	}
 	if u.Scheme != "http" {
-		return errors.New("baseURL must use HTTPS, or HTTP for a loopback host")
+		return fmt.Errorf("%s must use HTTPS, or HTTP for a loopback host", field)
 	}
-	host := u.Hostname()
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	if !strings.EqualFold(host, "localhost") {
 		ip := net.ParseIP(host)
 		if ip == nil || !ip.IsLoopback() {
-			return errors.New("remote baseURL must use HTTPS")
+			return fmt.Errorf("remote %s must use HTTPS", field)
 		}
 	}
 	return nil
@@ -355,7 +474,7 @@ func validateOperationPath(raw string) error {
 	}
 	for _, part := range strings.Split(u.Path, "/") {
 		if part == ".." {
-			return errors.New("path cannot contain ..")
+			return errors.New("path cannot contain dot-dot segments")
 		}
 	}
 	return nil
@@ -494,10 +613,12 @@ func (c *Config) validateTemplates(value any, priorSteps map[string]struct{}) er
 		for _, match := range templatePattern.FindAllStringSubmatch(text, -1) {
 			switch match[1] {
 			case "input":
-			case "vars":
-				name := strings.Split(match[2], ".")[0]
-				if _, ok := c.Variables[name]; !ok {
-					return fmt.Errorf("references undeclared variable %q", name)
+			case "secrets":
+				if strings.Contains(match[2], ".") {
+					return fmt.Errorf("secret alias %q is invalid", match[2])
+				}
+				if _, ok := c.Credentials[match[2]]; !ok {
+					return fmt.Errorf("references undeclared secret alias %q", match[2])
 				}
 			case "steps":
 				name := strings.Split(match[2], ".")[0]

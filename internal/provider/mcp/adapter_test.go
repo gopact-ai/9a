@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -24,6 +25,9 @@ import (
 )
 
 const mcpHelperEnv = "NINEA_MCP_HELPER"
+const mcpHelperToolResultEnv = "NINEA_MCP_HELPER_TOOL_RESULT"
+const mcpHelperCaptureParamsEnv = "NINEA_MCP_HELPER_CAPTURE_PARAMS"
+const mcpHelperLargeSchemaEnv = "NINEA_MCP_HELPER_LARGE_SCHEMA"
 
 func TestMCPHelperProcess(t *testing.T) {
 	mode := os.Getenv(mcpHelperEnv)
@@ -80,8 +84,23 @@ func TestMCPHelperProcess(t *testing.T) {
 		case "initialize":
 			writeResponse(map[string]any{"jsonrpc": "2.0", "id": *request.ID, "result": map[string]any{"protocolVersion": "2025-11-25"}})
 		case "tools/list":
-			writeResponse(map[string]any{"jsonrpc": "2.0", "id": *request.ID, "result": map[string]any{"tools": []any{map[string]any{"name": "echo", "description": "Echo input.", "inputSchema": map[string]any{"type": "object"}}}}})
+			tool := map[string]any{"name": "echo", "description": "Echo input.", "inputSchema": map[string]any{"type": "object"}}
+			if os.Getenv(mcpHelperLargeSchemaEnv) == "1" {
+				tool["inputSchema"] = map[string]any{"const": json.Number("9007199254740993")}
+				tool["outputSchema"] = map[string]any{"maximum": json.Number("9007199254740993")}
+			}
+			if os.Getenv("NINEA_MCP_HELPER_READ_ONLY") == "1" {
+				tool["annotations"] = map[string]any{"readOnlyHint": true}
+			}
+			tools := []any{tool}
+			if os.Getenv("NINEA_MCP_HELPER_EMPTY_TOOLS") == "1" {
+				tools = []any{}
+			}
+			writeResponse(map[string]any{"jsonrpc": "2.0", "id": *request.ID, "result": map[string]any{"tools": tools}})
 		case "tools/call":
+			if path := os.Getenv(mcpHelperCaptureParamsEnv); path != "" {
+				_ = os.WriteFile(path, request.Params, 0o600)
+			}
 			if ready := os.Getenv("NINEA_MCP_HELPER_READY"); ready != "" {
 				_ = os.WriteFile(ready, []byte("ready"), 0o600)
 			}
@@ -92,6 +111,18 @@ func TestMCPHelperProcess(t *testing.T) {
 				for {
 					time.Sleep(time.Second)
 				}
+			}
+			if os.Getenv("NINEA_MCP_HELPER_TOOL_ERROR") == "1" {
+				writeResponse(map[string]any{"jsonrpc": "2.0", "id": *request.ID, "result": map[string]any{"isError": true, "content": []any{map[string]any{"type": "text", "text": "sensitive upstream failure"}}}})
+				continue
+			}
+			if raw := os.Getenv(mcpHelperToolResultEnv); raw != "" {
+				var result any
+				if json.Unmarshal([]byte(raw), &result) != nil {
+					os.Exit(6)
+				}
+				writeResponse(map[string]any{"jsonrpc": "2.0", "id": *request.ID, "result": result})
+				continue
 			}
 			writeResponse(map[string]any{"jsonrpc": "2.0", "id": *request.ID, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}}})
 		}
@@ -106,7 +137,18 @@ func mcpHelperExecutable(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "mcp-helper")
-	script := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=^TestMCPHelperProcess$\n", binary)
+	var declarations strings.Builder
+	for _, key := range []string{
+		mcpHelperEnv, mcpHelperToolResultEnv, mcpHelperCaptureParamsEnv, mcpHelperLargeSchemaEnv, "GORACE",
+		"NINEA_MCP_HELPER_CRLF", "NINEA_MCP_HELPER_DESCENDANT", "NINEA_MCP_HELPER_DESCENDANT_PID",
+		"NINEA_MCP_HELPER_EMPTY_TOOLS", "NINEA_MCP_HELPER_EXIT", "NINEA_MCP_HELPER_HANG", "NINEA_MCP_HELPER_READY",
+		"NINEA_MCP_HELPER_READ_ONLY", "NINEA_MCP_HELPER_TOOL_ERROR", "NINEA_MCP_HELPER_UNTERMINATED",
+	} {
+		if value, ok := os.LookupEnv(key); ok {
+			fmt.Fprintf(&declarations, "export %s=%q\n", key, value)
+		}
+	}
+	script := fmt.Sprintf("#!/bin/sh\n%sexec %q -test.run=^TestMCPHelperProcess$\n", declarations.String(), binary)
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +157,7 @@ func mcpHelperExecutable(t *testing.T) string {
 
 func waitForMCPFile(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
@@ -359,8 +401,9 @@ func TestCancelTerminatesMCPProcessTreeAndReturnsCanceled(t *testing.T) {
 }
 
 func TestDirectMCPServerExitAndNormalStdioReturn(t *testing.T) {
-	// The race runtime otherwise delays subprocess exit for one second, which
-	// collides with this test's one-second context deadline.
+	// The race runtime otherwise delays subprocess exit for one second. Keep a
+	// wider deadline because this test also starts two race-instrumented helper
+	// processes and can run alongside the rest of the suite.
 	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	t.Setenv(mcpHelperEnv, "server")
 	adapter := New()
@@ -370,7 +413,8 @@ func TestDirectMCPServerExitAndNormalStdioReturn(t *testing.T) {
 		t.Fatalf("normal Invoke events=%#v error=%v", sink.events, err)
 	}
 	t.Setenv("NINEA_MCP_HELPER_EXIT", "1")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	p = mcpTestProvider(mcpHelperExecutable(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := adapter.Invoke(ctx, p, mcpTestCapability(), "invoke-exit", json.RawMessage(`{}`), &mcpRecordingSink{}); err == nil || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("direct exit error=%v", err)
@@ -536,9 +580,9 @@ func TestSplitTerminatedMCPResponseLineAcceptsLFCRLFAndBoundary(t *testing.T) {
 func TestMCPRejectsUnterminatedResponseAtEOFAndAcceptsCRLF(t *testing.T) {
 	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	t.Setenv(mcpHelperEnv, "server")
-	p := mcpTestProvider(mcpHelperExecutable(t))
 	t.Run("unterminated", func(t *testing.T) {
 		t.Setenv("NINEA_MCP_HELPER_UNTERMINATED", "1")
+		p := mcpTestProvider(mcpHelperExecutable(t))
 		_, err := New().Discover(context.Background(), p)
 		if err == nil || !strings.Contains(err.Error(), "newline") {
 			t.Fatalf("unterminated response error=%v", err)
@@ -546,11 +590,244 @@ func TestMCPRejectsUnterminatedResponseAtEOFAndAcceptsCRLF(t *testing.T) {
 	})
 	t.Run("CRLF", func(t *testing.T) {
 		t.Setenv("NINEA_MCP_HELPER_CRLF", "1")
+		p := mcpTestProvider(mcpHelperExecutable(t))
 		caps, err := New().Discover(context.Background(), p)
 		if err != nil || len(caps) != 1 {
 			t.Fatalf("CRLF capabilities=%d error=%v", len(caps), err)
 		}
 	})
+}
+
+func TestDiscoveryAlwaysRequiresApproval(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	for _, test := range []struct {
+		name     string
+		readOnly string
+		want     string
+	}{
+		{name: "unspecified side effects", want: "always"},
+		{name: "server claims read only", readOnly: "1", want: "always"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("NINEA_MCP_HELPER_READ_ONLY", test.readOnly)
+			p := mcpTestProvider(mcpHelperExecutable(t))
+			capabilities, err := New().Discover(context.Background(), p)
+			if err != nil || len(capabilities) != 1 {
+				t.Fatalf("capabilities=%#v error=%v", capabilities, err)
+			}
+			if capabilities[0].Security.RequiresApproval != test.want {
+				t.Fatalf("requires approval=%q want %q", capabilities[0].Security.RequiresApproval, test.want)
+			}
+		})
+	}
+}
+
+func TestDiscoveryPreservesLargeIntegersInSchemas(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	t.Setenv(mcpHelperLargeSchemaEnv, "1")
+	capabilities, err := New().Discover(context.Background(), mcpTestProvider(mcpHelperExecutable(t)))
+	if err != nil || len(capabilities) != 1 {
+		t.Fatalf("capabilities=%#v error=%v", capabilities, err)
+	}
+	input, err := json.Marshal(capabilities[0].Input.JSONSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := json.Marshal(capabilities[0].Output.JSONSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string][]byte{"input": input, "output": output} {
+		if !bytes.Contains(raw, []byte(`9007199254740993`)) {
+			t.Fatalf("%s schema lost integer precision: %s", name, raw)
+		}
+	}
+}
+
+func TestInvokePreservesLargeIntegerArguments(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	capture := filepath.Join(t.TempDir(), "params.json")
+	t.Setenv(mcpHelperCaptureParamsEnv, capture)
+
+	err := New().Invoke(
+		context.Background(),
+		mcpTestProvider(mcpHelperExecutable(t)),
+		mcpTestCapability(),
+		"large-integer",
+		json.RawMessage(`{"id":9007199254740993}`),
+		&mcpRecordingSink{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(params, []byte(`"id":9007199254740993`)) {
+		t.Fatalf("MCP parameters lost integer precision: %s", params)
+	}
+}
+
+func TestDiscoveryRejectsEmptyTools(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	t.Setenv("NINEA_MCP_HELPER_EMPTY_TOOLS", "1")
+	p := mcpTestProvider(mcpHelperExecutable(t))
+	_, err := New().Discover(context.Background(), p)
+	if err == nil || !strings.Contains(err.Error(), "no tools") {
+		t.Fatalf("empty tools error=%v", err)
+	}
+}
+
+func TestInvokeMapsToolResultErrorToRunFailure(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	t.Setenv("NINEA_MCP_HELPER_TOOL_ERROR", "1")
+	adapter := New()
+	p := mcpTestProvider(mcpHelperExecutable(t))
+	capability := mcpTestCapability()
+	capability.Output.JSONSchema = mcpTestOutputSchema()
+	err := adapter.Invoke(context.Background(), p, capability, "tool-error", json.RawMessage(`{}`), &mcpRecordingSink{})
+	var adapterErr *provider.AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Code() != "tool_error" || strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("Invoke error=%T %v", err, err)
+	}
+}
+
+func TestParseCallToolResult(t *testing.T) {
+	tests := []struct {
+		name        string
+		result      string
+		wantError   bool
+		wantIsError bool
+	}{
+		{name: "null", result: `null`, wantError: true},
+		{name: "empty object", result: `{}`, wantError: true},
+		{name: "missing content with structured content", result: `{"structuredContent":{"answer":"ok"}}`, wantError: true},
+		{name: "null content", result: `{"content":null}`, wantError: true},
+		{name: "non-array content", result: `{"content":{}}`, wantError: true},
+		{name: "non-object content block", result: `{"content":[null]}`, wantError: true},
+		{name: "content block missing type", result: `{"content":[{}]}`, wantError: true},
+		{name: "text block missing text", result: `{"content":[{"type":"text"}]}`, wantError: true},
+		{name: "image block missing MIME type", result: `{"content":[{"type":"image","data":"aA=="}]}`, wantError: true},
+		{name: "resource link missing name", result: `{"content":[{"type":"resource_link","uri":"file:///a"}]}`, wantError: true},
+		{name: "embedded resource missing data", result: `{"content":[{"type":"resource","resource":{"uri":"file:///a"}}]}`, wantError: true},
+		{name: "embedded resource has text and blob", result: `{"content":[{"type":"resource","resource":{"uri":"file:///a","text":"a","blob":"YQ=="}}]}`, wantError: true},
+		{name: "invalid isError type", result: `{"content":[],"isError":"true"}`, wantError: true},
+		{name: "null isError", result: `{"content":[],"isError":null}`, wantError: true},
+		{name: "invalid structured content type", result: `{"content":[],"structuredContent":[]}`, wantError: true},
+		{name: "empty content", result: `{"content":[]}`},
+		{name: "text content", result: `{"content":[{"type":"text","text":""}]}`},
+		{name: "image content", result: `{"content":[{"type":"image","data":"","mimeType":"image/png"}]}`},
+		{name: "audio content", result: `{"content":[{"type":"audio","data":"","mimeType":"audio/wav"}]}`},
+		{name: "resource link", result: `{"content":[{"type":"resource_link","name":"a","uri":"file:///a"}]}`},
+		{name: "embedded text resource", result: `{"content":[{"type":"resource","resource":{"uri":"file:///a","text":""}}]}`},
+		{name: "embedded blob resource", result: `{"content":[{"type":"resource","resource":{"uri":"file:///a","blob":""}}]}`},
+		{name: "structured content", result: `{"content":[],"structuredContent":{}}`},
+		{name: "tool error", result: `{"content":[],"isError":true}`, wantIsError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			isError, err := parseCallToolResult(json.RawMessage(test.result))
+			if (err != nil) != test.wantError {
+				t.Fatalf("parseCallToolResult error=%v wantError=%v", err, test.wantError)
+			}
+			if isError != test.wantIsError {
+				t.Fatalf("parseCallToolResult isError=%v want=%v", isError, test.wantIsError)
+			}
+		})
+	}
+}
+
+func TestInvokeValidatesToolOutputSchemaBeforeEmittingResult(t *testing.T) {
+	t.Setenv(mcpHelperEnv, "server")
+	tests := []struct {
+		name      string
+		result    string
+		wantError bool
+	}{
+		{name: "missing structured content", result: `{"content":[]}`, wantError: true},
+		{name: "schema mismatch", result: `{"content":[],"structuredContent":{"answer":1}}`, wantError: true},
+		{name: "valid", result: `{"content":[],"structuredContent":{"answer":"ok"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(mcpHelperToolResultEnv, test.result)
+			capability := mcpTestCapability()
+			capability.Output.JSONSchema = mcpTestOutputSchema()
+			sink := &mcpRecordingSink{}
+			err := New().Invoke(context.Background(), mcpTestProvider(mcpHelperExecutable(t)), capability, "output-validation", json.RawMessage(`{}`), sink)
+			if (err != nil) != test.wantError {
+				t.Fatalf("Invoke error=%v wantError=%v", err, test.wantError)
+			}
+			if test.wantError && (!errors.Is(err, errInvalidMCPToolResult) || len(sink.events) != 0) {
+				t.Fatalf("invalid result error=%v events=%#v", err, sink.events)
+			}
+			if !test.wantError && len(sink.events) != 1 {
+				t.Fatalf("valid result events=%#v", sink.events)
+			}
+		})
+	}
+}
+
+func mcpTestOutputSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []any{"structuredContent"},
+		"properties": map[string]any{
+			"structuredContent": map[string]any{
+				"type":     "object",
+				"required": []any{"answer"},
+				"properties": map[string]any{
+					"answer": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+}
+
+func TestSafeEnvironmentUsesMinimalAllowlist(t *testing.T) {
+	input := []string{
+		"PATH=/usr/bin", "HOME=/tmp/home", "LANG=en_US.UTF-8",
+		"AWS_SECRET_ACCESS_KEY=secret", "GITHUB_TOKEN=secret", "NINEA_TOKEN=secret", "MALFORMED",
+	}
+	want := []string{"PATH=/usr/bin", "HOME=/tmp/home", "LANG=en_US.UTF-8"}
+	if got := safeEnvironment(input); !reflect.DeepEqual(got, want) {
+		t.Fatalf("safeEnvironment()=%q want %q", got, want)
+	}
+}
+
+func TestMCPProcessUsesOwningWorkspaceAsWorkingDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "cwd")
+	executable := filepath.Join(t.TempDir(), "mcp-cwd-helper")
+	script := fmt.Sprintf(`#!/bin/sh
+pwd > %q
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}' ;;
+    *'"method":"tools/list"'*) printf '%%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}' ;;
+  esac
+done
+`, marker)
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := mcpTestProvider(executable)
+	p.Config = map[string]string{"workspace_root": workspace}
+	if _, err := New().Discover(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(data)) != canonical {
+		t.Fatalf("MCP cwd=%q want %q", strings.TrimSpace(string(data)), canonical)
+	}
 }
 
 func TestSessionScannerKeepsStdoutReadableAfterProcessExit(t *testing.T) {
@@ -561,7 +838,7 @@ func TestSessionScannerKeepsStdoutReadableAfterProcessExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.stop(context.Background())
+	defer func() { _ = s.stop(context.Background()) }()
 	s.callMu.Lock()
 	defer s.callMu.Unlock()
 	if err := json.NewEncoder(s.in).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{}}); err != nil {
@@ -585,7 +862,7 @@ func TestSessionReapsDescendantHoldingStdoutAfterProcessExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.stop(context.Background())
+	defer func() { _ = s.stop(context.Background()) }()
 	s.callMu.Lock()
 	locked := true
 	defer func() {

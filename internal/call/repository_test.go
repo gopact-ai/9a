@@ -118,7 +118,22 @@ func TestRepositoryCreateQuotaBoundaries(t *testing.T) {
 		if err := repo.Create(ctx, quotaCall("call-identity-retained-boundary", "owner"), input); err != nil {
 			t.Fatalf("exact boundary Create() error=%v", err)
 		}
-		requireQuotaLimit(t, repo.Create(ctx, quotaCall("call-identity-retained-over", "owner"), input), ErrIdentityRetainedQuota)
+		if err := repo.Create(ctx, quotaCall("call-identity-retained-over", "owner"), input); err != nil {
+			t.Fatalf("pruning Create() error=%v", err)
+		}
+		var retained int
+		if err := repo.db.QueryRow(`SELECT count(*) FROM calls WHERE identity_id='owner'`).Scan(&retained); err != nil {
+			t.Fatal(err)
+		}
+		if retained != identityRetainedLimit {
+			t.Fatalf("retained calls=%d want=%d", retained, identityRetainedLimit)
+		}
+		if _, err := repo.Get(ctx, "call-identity-retained-0"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("oldest terminal Get() error=%v", err)
+		}
+		if _, err := repo.Get(ctx, "call-identity-retained-boundary"); err != nil {
+			t.Fatalf("active boundary call was pruned: %v", err)
+		}
 	})
 
 	t.Run("global retained count", func(t *testing.T) {
@@ -127,7 +142,22 @@ func TestRepositoryCreateQuotaBoundaries(t *testing.T) {
 		if err := repo.Create(ctx, quotaCall("call-global-retained-boundary", "boundary-agent"), input); err != nil {
 			t.Fatalf("exact boundary Create() error=%v", err)
 		}
-		requireQuotaLimit(t, repo.Create(ctx, quotaCall("call-global-retained-over", "other-agent"), input), ErrGlobalRetainedQuota)
+		if err := repo.Create(ctx, quotaCall("call-global-retained-over", "other-agent"), input); err != nil {
+			t.Fatalf("pruning Create() error=%v", err)
+		}
+		var retained int
+		if err := repo.db.QueryRow(`SELECT count(*) FROM calls`).Scan(&retained); err != nil {
+			t.Fatal(err)
+		}
+		if retained != globalRetainedLimit {
+			t.Fatalf("retained calls=%d want=%d", retained, globalRetainedLimit)
+		}
+		if _, err := repo.Get(ctx, "call-global-retained-0"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("oldest terminal Get() error=%v", err)
+		}
+		if _, err := repo.Get(ctx, "call-global-retained-boundary"); err != nil {
+			t.Fatalf("active boundary call was pruned: %v", err)
+		}
 	})
 
 	t.Run("identity retained bytes", func(t *testing.T) {
@@ -137,7 +167,18 @@ func TestRepositoryCreateQuotaBoundaries(t *testing.T) {
 		if err := repo.Create(ctx, quotaCall("call-identity-bytes-boundary", "owner"), input); err != nil {
 			t.Fatalf("exact boundary Create() error=%v", err)
 		}
-		requireQuotaLimit(t, repo.Create(ctx, quotaCall("call-identity-bytes-over", "owner"), input), ErrIdentityByteQuota)
+		if err := repo.Create(ctx, quotaCall("call-identity-bytes-over", "owner"), input); err != nil {
+			t.Fatalf("pruning Create() error=%v", err)
+		}
+		if got := totalStorageUsage(t, repo); got != int64(2*len(input)) {
+			t.Fatalf("storage bytes=%d want=%d", got, 2*len(input))
+		}
+		if _, err := repo.Get(ctx, "call-identity-bytes-0"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("terminal byte owner Get() error=%v", err)
+		}
+		if _, err := repo.Get(ctx, "call-identity-bytes-boundary"); err != nil {
+			t.Fatalf("active boundary call was pruned: %v", err)
+		}
 	})
 
 	t.Run("global retained bytes", func(t *testing.T) {
@@ -147,7 +188,43 @@ func TestRepositoryCreateQuotaBoundaries(t *testing.T) {
 		if err := repo.Create(ctx, quotaCall("call-global-bytes-boundary", "owner"), input); err != nil {
 			t.Fatalf("exact boundary Create() error=%v", err)
 		}
-		requireQuotaLimit(t, repo.Create(ctx, quotaCall("call-global-bytes-over", "another"), input), ErrGlobalByteQuota)
+		if err := repo.Create(ctx, quotaCall("call-global-bytes-over", "another"), input); err != nil {
+			t.Fatalf("pruning Create() error=%v", err)
+		}
+		if got := totalStorageUsage(t, repo); got != int64(2*len(input)) {
+			t.Fatalf("storage bytes=%d want=%d", got, 2*len(input))
+		}
+		if _, err := repo.Get(ctx, "call-global-bytes-0"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("terminal byte owner Get() error=%v", err)
+		}
+		if _, err := repo.Get(ctx, "call-global-bytes-boundary"); err != nil {
+			t.Fatalf("active boundary call was pruned: %v", err)
+		}
+	})
+
+	t.Run("active bytes remain a hard limit", func(t *testing.T) {
+		repo, _ := openCallRepository(t)
+		seedQuotaCalls(t, repo, "call-active-bytes", 1, func(int) string { return "owner" }, Submitted)
+		setCallStorageUsage(t, repo, "call-active-bytes-0", identityByteLimit)
+		requireQuotaLimit(t, repo.Create(ctx, quotaCall("call-active-bytes-over", "owner"), input), ErrIdentityByteQuota)
+		if _, err := repo.Get(ctx, "call-active-bytes-0"); err != nil {
+			t.Fatalf("active byte owner was pruned: %v", err)
+		}
+	})
+
+	t.Run("insufficient pruning rolls back", func(t *testing.T) {
+		repo, _ := openCallRepository(t)
+		seedQuotaCalls(t, repo, "call-rollback-terminal", 1, func(int) string { return "owner" }, Failed)
+		seedQuotaCalls(t, repo, "call-rollback-active", 1, func(int) string { return "owner" }, Submitted)
+		setCallStorageUsage(t, repo, "call-rollback-terminal-0", 1)
+		setCallStorageUsage(t, repo, "call-rollback-active-0", identityByteLimit-1)
+		requireQuotaLimit(t, repo.Create(ctx, quotaCall("call-rollback-over", "owner"), input), ErrIdentityByteQuota)
+		if _, err := repo.Get(ctx, "call-rollback-terminal-0"); err != nil {
+			t.Fatalf("failed admission committed terminal pruning: %v", err)
+		}
+		if _, err := repo.Get(ctx, "call-rollback-active-0"); err != nil {
+			t.Fatalf("failed admission removed active call: %v", err)
+		}
 	})
 }
 
@@ -169,7 +246,49 @@ func TestRepositoryCreateQuotaIsolatesIdentitiesAndSurvivesReopen(t *testing.T) 
 	t.Cleanup(func() { _ = db.Close() })
 	reopened := NewRepository(db)
 	requireQuotaLimit(t, reopened.Create(ctx, quotaCall("call-full-owner-after-reopen", "full-owner"), json.RawMessage(`{}`)), ErrIdentityActiveQuota)
-	requireQuotaLimit(t, reopened.Create(ctx, quotaCall("call-retained-owner-after-reopen", "retained-owner"), json.RawMessage(`{}`)), ErrIdentityRetainedQuota)
+	if err := reopened.Create(ctx, quotaCall("call-retained-owner-after-reopen", "retained-owner"), json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("retained owner Create() after reopen error=%v", err)
+	}
+}
+
+func TestRepositoryConcurrentCreatePrunesTerminalCallsTransactionally(t *testing.T) {
+	ctx := context.Background()
+	repo, path := openCallRepository(t)
+	seedQuotaCalls(t, repo, "call-concurrent-retained", MaxIdentityRetainedCalls, func(int) string { return "owner" }, Failed)
+	dbTwo, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dbTwo.Close() })
+	repos := []*Repository{repo, NewRepository(dbTwo)}
+
+	const attempts = MaxIdentityActiveCalls
+	start := make(chan struct{})
+	errs := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := range attempts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs <- repos[i%len(repos)].Create(ctx, quotaCall(fmt.Sprintf("call-concurrent-prune-%d", i), "owner"), json.RawMessage(`{}`))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent pruning Create() error=%v", err)
+		}
+	}
+	var retained, active int
+	if err := repo.db.QueryRow(`SELECT count(*),sum(CASE WHEN state NOT IN ('completed','failed','canceled','rejected') THEN 1 ELSE 0 END) FROM calls WHERE identity_id='owner'`).Scan(&retained, &active); err != nil {
+		t.Fatal(err)
+	}
+	if retained != MaxIdentityRetainedCalls || active != attempts {
+		t.Fatalf("retained=%d active=%d want retained=%d active=%d", retained, active, MaxIdentityRetainedCalls, attempts)
+	}
 }
 
 func TestRepositoryConcurrentAdmissionHonorsIdentityActiveQuota(t *testing.T) {
@@ -470,23 +589,16 @@ func TestRepositoryEventCountAndPayloadBounds(t *testing.T) {
 	if _, err := repo.AppendEvent(ctx, "call-bounds", make(json.RawMessage, MaxEventEnvelopeBytes+1)); !errors.Is(err, ErrPayloadTooLarge) {
 		t.Fatalf("oversized AppendEvent() error=%v", err)
 	}
-	if _, err := repo.db.ExecContext(ctx, `DELETE FROM call_event_usage WHERE call_id=?`, "call-bounds"); err != nil {
-		t.Fatal(err)
-	}
 	for i := 1; i <= MaxEvents; i++ {
 		if _, err := repo.db.ExecContext(ctx, `INSERT INTO events(call_id,sequence,data_json) VALUES(?,?,?)`, "call-bounds", i, []byte(`{"kind":"event"}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, err := repo.db.ExecContext(ctx, `UPDATE call_event_usage SET event_count=?,byte_count=? WHERE call_id=?`, MaxEvents, MaxEvents*len(`{"kind":"event"}`), "call-bounds"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := repo.AppendEvent(ctx, "call-bounds", json.RawMessage(`{"kind":"event"}`)); !errors.Is(err, ErrTooManyEvents) {
 		t.Fatalf("event overflow error=%v", err)
-	}
-	var backfilledCount, backfilledBytes int64
-	if err := repo.db.QueryRowContext(ctx, `SELECT event_count,byte_count FROM call_event_usage WHERE call_id=?`, "call-bounds").Scan(&backfilledCount, &backfilledBytes); err != nil {
-		t.Fatalf("rejected legacy append did not retain usage backfill: %v", err)
-	}
-	if backfilledCount != MaxEvents || backfilledBytes <= 0 {
-		t.Fatalf("legacy usage count=%d bytes=%d", backfilledCount, backfilledBytes)
 	}
 	events, err := repo.ListEvents(ctx, "call-bounds", MaxEventList+1)
 	if err != nil || len(events) != MaxEventList {
@@ -671,37 +783,26 @@ func TestRepositoryConcurrentAppendsCannotExceedAggregateBudget(t *testing.T) {
 	}
 }
 
-func TestRepositoryEventUsageBackfillsAndRejectsIntegerOverflow(t *testing.T) {
+func TestRepositoryEventUsageRequiresInvariantAndRejectsIntegerOverflow(t *testing.T) {
 	ctx := context.Background()
 	repo, _ := openCallRepository(t)
-	if err := repo.Create(ctx, submittedCall("call-usage-backfill"), json.RawMessage(`{}`)); err != nil {
+	if err := repo.Create(ctx, submittedCall("call-usage-invariant"), json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.db.ExecContext(ctx, `DELETE FROM call_event_usage WHERE call_id=?`, "call-usage-backfill"); err != nil {
+	if _, err := repo.db.ExecContext(ctx, `DELETE FROM call_event_usage WHERE call_id=?`, "call-usage-invariant"); err != nil {
 		t.Fatal(err)
 	}
-	existing := []byte(`{"old":true}`)
-	if _, err := repo.db.ExecContext(ctx, `INSERT INTO events(call_id,sequence,data_json) VALUES(?,?,?),(?,?,?)`, "call-usage-backfill", 1, existing, "call-usage-backfill", 2, existing); err != nil {
+	if _, err := repo.AppendEvent(ctx, "call-usage-invariant", json.RawMessage(`{"new":true}`)); !errors.Is(err, ErrStorageInvariant) {
+		t.Fatalf("missing event usage error=%v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `INSERT INTO call_event_usage(call_id,event_count,byte_count) VALUES(?,?,?)`, "call-usage-invariant", 3, int64(math.MaxInt64)); err != nil {
 		t.Fatal(err)
 	}
-	added := json.RawMessage(`{"new":true}`)
-	if _, err := repo.AppendEvent(ctx, "call-usage-backfill", added); err != nil {
-		t.Fatal(err)
-	}
-	var count, bytes int64
-	if err := repo.db.QueryRowContext(ctx, `SELECT event_count,byte_count FROM call_event_usage WHERE call_id=?`, "call-usage-backfill").Scan(&count, &bytes); err != nil {
-		t.Fatal(err)
-	}
-	if count != 3 || bytes != int64(2*len(existing)+len(added)) {
-		t.Fatalf("backfilled usage count=%d bytes=%d", count, bytes)
-	}
-	if _, err := repo.db.ExecContext(ctx, `UPDATE call_event_usage SET byte_count=? WHERE call_id=?`, int64(math.MaxInt64), "call-usage-backfill"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.AppendEvent(ctx, "call-usage-backfill", json.RawMessage(`[]`)); err == nil {
+	if _, err := repo.AppendEvent(ctx, "call-usage-invariant", json.RawMessage(`[]`)); err == nil {
 		t.Fatal("AppendEvent accepted overflowing byte count")
 	}
-	if err := repo.db.QueryRowContext(ctx, `SELECT event_count,byte_count FROM call_event_usage WHERE call_id=?`, "call-usage-backfill").Scan(&count, &bytes); err != nil {
+	var count, bytes int64
+	if err := repo.db.QueryRowContext(ctx, `SELECT event_count,byte_count FROM call_event_usage WHERE call_id=?`, "call-usage-invariant").Scan(&count, &bytes); err != nil {
 		t.Fatal(err)
 	}
 	if count != 3 || bytes != math.MaxInt64 {

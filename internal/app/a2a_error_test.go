@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gopact-ai/9a/internal/call"
-	"github.com/gopact-ai/9a/internal/provider"
 )
 
 func TestA2ASyncAndAsyncErrorsDoNotExposeUpstreamDetails(t *testing.T) {
@@ -34,29 +35,31 @@ func TestA2ASyncAndAsyncErrorsDoNotExposeUpstreamDetails(t *testing.T) {
 	defer server.Close()
 
 	a, _ := testApp(t)
+	defer func() { _ = a.Close(context.Background()) }()
 	ctx := context.Background()
-	p := provider.Provider{ID: "a2a/safe-agent", Protocol: "a2a", Name: "safe-agent", Endpoint: server.URL}
-	if err := a.AddProvider(ctx, p); err != nil {
+	if err := a.Bootstrap(ctx, "secret"); err != nil {
 		t.Fatal(err)
 	}
-	capabilityID := "a2a/safe-agent/fail"
-	if err := a.Grant(ctx, "agent", capabilityID, []string{"invoke"}); err != nil {
+	root := t.TempDir()
+	cleanupReadOnlyProjection(t, root)
+	source := []byte(fmt.Sprintf("version: 1\nname: safe-agent\ntype: a2a\nurl: %s\n", server.URL))
+	if _, err := a.Connect(ctx, "admin", source, root); err != nil {
 		t.Fatal(err)
 	}
 	input := json.RawMessage(`{"parts":[{"text":"fail"}]}`)
-	_, err := a.Invoke(ctx, "agent", capabilityID, input)
+	approval := approvalForRun(t, a, "admin", root, "safe-agent/fail", input)
+	_, err := a.RunInWorkspace(ctx, "admin", root, "safe-agent/fail", input, approval)
 	if err == nil {
-		t.Fatal("Invoke unexpectedly succeeded")
+		t.Fatal("RunInWorkspace unexpectedly succeeded")
 	}
 	assertNoA2ASecret(t, err.Error(), sentinel)
-
-	id, err := a.StartCall(ctx, "agent", capabilityID, input)
-	if err != nil {
-		t.Fatal(err)
+	var runErr *RunError
+	if !errors.As(err, &runErr) || runErr.CallID == "" {
+		t.Fatalf("RunInWorkspace error=%#v", err)
 	}
 	var record call.Record
 	for deadline := time.Now().Add(time.Second); ; {
-		record, err = a.GetCall(ctx, "agent", id)
+		record, err = a.getCall(ctx, "admin", runErr.CallID)
 		if err == nil && record.Call.State == call.Failed {
 			break
 		}

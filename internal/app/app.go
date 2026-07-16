@@ -3,15 +3,12 @@ package app
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	adapterreg "github.com/gopact-ai/9a/internal/adapter"
 	"github.com/gopact-ai/9a/internal/authn"
 	"github.com/gopact-ai/9a/internal/authz"
 	"github.com/gopact-ai/9a/internal/buildinfo"
@@ -20,16 +17,12 @@ import (
 	"github.com/gopact-ai/9a/internal/capability"
 	"github.com/gopact-ai/9a/internal/catalog"
 	"github.com/gopact-ai/9a/internal/declarative"
-	"github.com/gopact-ai/9a/internal/generator"
-	"github.com/gopact-ai/9a/internal/mount"
-	fusemount "github.com/gopact-ai/9a/internal/mount/fuse"
 	"github.com/gopact-ai/9a/internal/projection"
 	"github.com/gopact-ai/9a/internal/provider"
 	"github.com/gopact-ai/9a/internal/provider/a2a"
-	"github.com/gopact-ai/9a/internal/provider/executable"
 	"github.com/gopact-ai/9a/internal/provider/mcp"
 	"github.com/gopact-ai/9a/internal/search"
-	"github.com/gopact-ai/9a/internal/workspace"
+	"github.com/gopact-ai/9a/internal/secret"
 )
 
 var ErrRestoreRequiresFreshApp = errors.New("restore requires a fresh app")
@@ -59,47 +52,68 @@ type operationLease struct {
 type catalogRepository interface {
 	ReplaceProviderCapabilities(context.Context, provider.Provider, []capability.Capability) (int64, error)
 	GetCapability(context.Context, string) (capability.Capability, error)
+	ResolveWorkspaceCapability(context.Context, string, string) (capability.Capability, error)
 	ListProviders(context.Context) ([]provider.Provider, error)
 }
 
 type App struct {
-	db                          *sql.DB
-	cat                         catalogRepository
-	az                          *authz.Service
-	authn                       *authn.Service
-	search                      *search.Service
-	mu                          sync.RWMutex
-	mutation                    sync.RWMutex
-	state                       appState
-	leases                      map[*operationLease]struct{}
-	idle                        chan struct{}
-	closeDone                   chan struct{}
-	closeErr                    error
-	providers                   map[string]provider.Provider
-	adapters                    map[string]provider.Adapter
-	adapterDB                   *adapterreg.Repository
-	callDB                      *call.Repository
-	activeCalls                 map[string]*callRuntime
-	callErrors                  map[string]error
-	callErrorOrder              []string
-	callErrorNext               int
-	cancelBeforeRuntimeSnapshot func()
-	projections                 *projection.Manager
+	db             *sql.DB
+	cat            catalogRepository
+	az             *authz.Service
+	authn          *authn.Service
+	search         *search.Service
+	secrets        *secret.Service
+	mu             sync.RWMutex
+	mutation       sync.RWMutex
+	providerGateMu sync.Mutex
+	providerGates  map[string]*sync.RWMutex
+	approvalMu     sync.Mutex
+	approvals      map[string]approvalChallenge
+	approvalOrder  []string
+	state          appState
+	leases         map[*operationLease]struct{}
+	idle           chan struct{}
+	closeDone      chan struct{}
+	closeErr       error
+	providers      map[string]provider.Provider
+	adapters       map[string]provider.Adapter
+	callDB         *call.Repository
+	activeCalls    map[string]*callRuntime
+	callErrors     map[string]error
+	callErrorOrder []string
+	callErrorNext  int
+	projections    *projection.Manager
 }
 
 func New(db *sql.DB) *App {
+	return NewWithSecretBackend(db, secret.NewKeyringBackend())
+}
+
+func NewWithSecretBackend(db *sql.DB, backend secret.Backend) *App {
 	az := authz.New(db)
+	secrets := secret.NewService(db, backend)
 	idle := make(chan struct{})
 	close(idle)
 	builtinSkill, err := builtin.UsingNineA(buildinfo.Version)
 	if err != nil {
 		panic(err)
 	}
-	return &App{db: db, cat: catalog.New(db), az: az, authn: authn.New(db), search: search.New(db, az), leases: map[*operationLease]struct{}{}, idle: idle, closeDone: make(chan struct{}), providers: map[string]provider.Provider{}, adapters: builtInAdapters(), adapterDB: adapterreg.NewRepository(db), callDB: call.NewRepository(db), activeCalls: map[string]*callRuntime{}, callErrors: map[string]error{}, projections: projection.New(db, builtinSkill, fusemount.New())}
+	return &App{db: db, cat: catalog.New(db), az: az, authn: authn.New(db), search: search.New(db, az), secrets: secrets, leases: map[*operationLease]struct{}{}, idle: idle, closeDone: make(chan struct{}), providers: map[string]provider.Provider{}, adapters: builtInAdapters(secrets), providerGates: map[string]*sync.RWMutex{}, approvals: map[string]approvalChallenge{}, callDB: call.NewRepository(db), activeCalls: map[string]*callRuntime{}, callErrors: map[string]error{}, projections: projection.New(db, builtinSkill)}
 }
 
-func builtInAdapters() map[string]provider.Adapter {
-	return map[string]provider.Adapter{"mcp": mcp.New(), "a2a": a2a.New(), "api": declarative.NewAdapter()}
+func (a *App) providerGate(id string) *sync.RWMutex {
+	a.providerGateMu.Lock()
+	defer a.providerGateMu.Unlock()
+	gate := a.providerGates[id]
+	if gate == nil {
+		gate = &sync.RWMutex{}
+		a.providerGates[id] = gate
+	}
+	return gate
+}
+
+func builtInAdapters(resolver secret.Resolver) map[string]provider.Adapter {
+	return map[string]provider.Adapter{"mcp": mcp.New(), "a2a": a2a.NewWithResolver(resolver), "api": declarative.NewAdapterWithResolver(resolver)}
 }
 
 func (a *App) beginOperation(ctx context.Context) (*operationLease, error) {
@@ -170,7 +184,7 @@ func (a *App) Bootstrap(ctx context.Context, token string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var count int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM tokens`).Scan(&count); err != nil {
 		return err
@@ -185,9 +199,6 @@ func (a *App) Bootstrap(ctx context.Context, token string) error {
 		return err
 	}
 	return tx.Commit()
-}
-func (a *App) CreateToken(ctx context.Context, identity string) (string, error) {
-	return a.authn.Create(ctx, identity)
 }
 func (a *App) Authenticate(ctx context.Context, token string) (string, error) {
 	return a.authn.Authenticate(ctx, token)
@@ -223,55 +234,86 @@ func (a *App) Restore(ctx context.Context) error {
 		}
 	}
 	a.mu.Unlock()
-	registrations, err := a.adapterDB.List(lease.ctx)
-	if err != nil {
-		return lease.result(err)
-	}
-	adapters := builtInAdapters()
-	for _, registration := range registrations {
-		canonical, validateErr := adapterreg.ValidateRegistration(registration.Protocol, registration.Executable)
-		if validateErr != nil {
-			return fmt.Errorf("restore adapter %q: %w", registration.Protocol, validateErr)
-		}
-		if canonical != registration.Executable {
-			return fmt.Errorf("restore adapter %q: %w: executable path is not canonical", registration.Protocol, adapterreg.ErrInvalid)
-		}
-		if adapters[registration.Protocol] != nil {
-			return fmt.Errorf("restore adapter %q: %w", registration.Protocol, adapterreg.ErrDuplicate)
-		}
-		external, createErr := executable.New(registration.Protocol, canonical)
-		if createErr != nil {
-			return fmt.Errorf("restore adapter %q: %w", registration.Protocol, adapterreg.ErrInvalid)
-		}
-		adapters[registration.Protocol] = external
-	}
+	adapters := builtInAdapters(a.secrets)
 	providers, err := a.cat.ListProviders(lease.ctx)
 	if err != nil {
 		return lease.result(err)
 	}
+	currentCapabilities, err := catalog.New(a.db).ListCapabilities(lease.ctx)
+	if err != nil {
+		return lease.result(err)
+	}
+	currentByProvider := make(map[string][]capability.Capability)
+	for _, item := range currentCapabilities {
+		providerID := capabilityProviderID(item)
+		currentByProvider[providerID] = append(currentByProvider[providerID], item)
+	}
 	restoredProviders := make(map[string]provider.Provider, len(providers))
 	for _, p := range providers {
-		expectedID := p.Protocol + "/" + p.Name
-		if p.ID != expectedID {
-			return fmt.Errorf("persisted provider %q has inconsistent provider id; expected %q", p.ID, expectedID)
-		}
-		if p.Protocol == localSkillProtocol && p.Config["source_kind"] == localSkillProviderKind {
+		adapter := adapters[p.Protocol]
+		if adapter == nil {
+			if deleteErr := catalog.New(a.db).DeleteProvider(lease.ctx, p.ID); deleteErr != nil {
+				return fmt.Errorf("remove unsupported persisted integration %q: %w", p.Name, deleteErr)
+			}
 			continue
 		}
-		if adapters[p.Protocol] == nil {
-			return errors.New("persisted provider uses unsupported protocol: " + p.Protocol)
-		}
-		if p.Protocol == "api" {
-			source := p.Config["source"]
-			config, parseErr := declarative.Parse([]byte(source))
-			if parseErr != nil {
-				return fmt.Errorf("restore declarative source %q: %w", p.Name, parseErr)
+		config, parseErr := integrationConfig(p)
+		if parseErr != nil {
+			if _, replaceErr := a.cat.ReplaceProviderCapabilities(lease.ctx, p, nil); replaceErr != nil {
+				return fmt.Errorf("mark integration %q broken: %w", p.Name, replaceErr)
 			}
-			if registerErr := adapters["api"].(*declarative.Adapter).Register(p, config); registerErr != nil {
-				return fmt.Errorf("restore declarative source %q: %w", p.Name, registerErr)
+			restoredProviders[p.ID] = p
+			continue
+		}
+		desiredProvider, providerErr := integrationProvider(config, p.Config["workspace_root"])
+		if providerErr != nil {
+			if _, replaceErr := a.cat.ReplaceProviderCapabilities(lease.ctx, p, nil); replaceErr != nil {
+				return fmt.Errorf("mark integration %q broken: %w", p.Name, replaceErr)
+			}
+			restoredProviders[p.ID] = p
+			continue
+		}
+		if p.ID != desiredProvider.ID {
+			if deleteErr := catalog.New(a.db).DeleteProvider(lease.ctx, p.ID); deleteErr != nil {
+				return fmt.Errorf("remove stale integration %q: %w", p.Name, deleteErr)
+			}
+			if _, replaceErr := a.cat.ReplaceProviderCapabilities(lease.ctx, desiredProvider, nil); replaceErr != nil {
+				return fmt.Errorf("mark integration %q broken: %w", p.Name, replaceErr)
+			}
+			restoredProviders[desiredProvider.ID] = desiredProvider
+			continue
+		}
+		capabilities := currentByProvider[p.ID]
+		if httpAdapter, ok := adapter.(*declarative.Adapter); ok {
+			if registerErr := httpAdapter.Register(desiredProvider, config); registerErr != nil {
+				if _, replaceErr := a.cat.ReplaceProviderCapabilities(lease.ctx, desiredProvider, nil); replaceErr != nil {
+					return fmt.Errorf("mark integration %q broken: %w", p.Name, replaceErr)
+				}
+				restoredProviders[desiredProvider.ID] = desiredProvider
+				continue
+			}
+			discovered, discoverErr := adapter.Discover(lease.ctx, desiredProvider)
+			if discoverErr != nil {
+				httpAdapter.Unregister(desiredProvider.ID)
+				if _, replaceErr := a.cat.ReplaceProviderCapabilities(lease.ctx, desiredProvider, nil); replaceErr != nil {
+					return fmt.Errorf("mark integration %q broken: %w", p.Name, replaceErr)
+				}
+				restoredProviders[desiredProvider.ID] = desiredProvider
+				continue
+			}
+			capabilities = scopeIntegrationCapabilities(desiredProvider, discovered)
+		} else if !sameIntegrationProvider(p, desiredProvider) {
+			capabilities = nil
+		}
+		if !sameIntegrationProvider(p, desiredProvider) || !sameCapabilities(currentByProvider[p.ID], capabilities) {
+			if _, replaceErr := a.cat.ReplaceProviderCapabilities(lease.ctx, desiredProvider, capabilities); replaceErr != nil {
+				return fmt.Errorf("restore integration %q: %w", p.Name, replaceErr)
 			}
 		}
-		restoredProviders[p.ID] = p
+		if _, grantErr := a.grantIntegrationCapabilities(lease.ctx, lease.ctx, "admin", capabilities); grantErr != nil {
+			return fmt.Errorf("restore integration %q grants: %w", p.Name, grantErr)
+		}
+		restoredProviders[desiredProvider.ID] = desiredProvider
 	}
 	if _, err := a.callDB.RecoverInterrupted(lease.ctx, "daemon_restarted", "daemon restarted before call completed"); err != nil {
 		return lease.result(err)
@@ -287,251 +329,25 @@ func (a *App) Restore(ctx context.Context) error {
 	a.adapters = adapters
 	a.providers = restoredProviders
 	a.mu.Unlock()
-	return a.restoreManagedViews(lease.ctx)
-}
-
-func (a *App) AddAdapter(ctx context.Context, protocol, path string) error {
-	lease, err := a.beginOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer lease.done()
-	a.mutation.Lock()
-	defer a.mutation.Unlock()
-	if err := lease.check(); err != nil {
-		return err
-	}
-	canonical, err := adapterreg.ValidateRegistration(protocol, path)
-	if err != nil {
-		return err
-	}
-	external, err := executable.New(protocol, canonical)
-	if err != nil {
-		return fmt.Errorf("%w: invalid executable adapter", adapterreg.ErrInvalid)
-	}
-	a.mu.Lock()
-	existing := a.adapters[protocol]
-	a.mu.Unlock()
-	if existing != nil {
-		return adapterreg.ErrDuplicate
-	}
-	if _, err := a.adapterDB.Add(lease.ctx, protocol, canonical); err != nil {
-		return lease.result(err)
-	}
-	a.mu.Lock()
-	if a.state != appOpen {
-		a.mu.Unlock()
-		return ErrAppClosed
-	}
-	a.adapters[protocol] = external
-	a.mu.Unlock()
 	return nil
 }
 
-func (a *App) AddProvider(ctx context.Context, p provider.Provider) error {
-	lease, err := a.beginOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer lease.done()
-	a.mutation.Lock()
-	defer a.mutation.Unlock()
-	if err := lease.check(); err != nil {
-		return err
-	}
-	return a.addProviderLocked(lease, p)
-}
-
-func (a *App) RemoveProvider(ctx context.Context, identity, protocol, name string) error {
-	if !a.IsAdmin(ctx, identity) {
-		return errors.New("admin permission required")
-	}
-	if protocol == "api" {
-		return errors.New("use 9a remove for declarative providers")
-	}
-	lease, err := a.beginOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer lease.done()
-	a.mutation.Lock()
-	defer a.mutation.Unlock()
-	id := protocol + "/" + name
-	a.mu.RLock()
-	p, ok := a.providers[id]
-	ad := a.adapters[protocol]
-	a.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("provider %q not found", id)
-	}
-	capabilities, err := catalog.New(a.db).ListCapabilities(lease.ctx)
-	if err != nil {
-		return err
-	}
-	if ad != nil {
-		if err = ad.Close(lease.ctx, p); err != nil {
-			return err
-		}
-	}
-	for _, c := range capabilities {
-		if c.Source.Protocol == protocol && c.Source.Provider == name {
-			if err = a.projections.RemoveBySource(lease.ctx, "capability", c.ID); err != nil {
-				return err
-			}
-		}
-	}
-	if err = catalog.New(a.db).DeleteProvider(lease.ctx, id); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	delete(a.providers, id)
-	a.mu.Unlock()
-	return nil
-}
-
-func (a *App) addProviderLocked(lease *operationLease, p provider.Provider) error {
-	expectedID := p.Protocol + "/" + p.Name
-	if p.ID != expectedID {
-		return fmt.Errorf("provider %q has inconsistent provider id; expected %q", p.ID, expectedID)
-	}
-	a.mu.Lock()
-	ad := a.adapters[p.Protocol]
-	a.mu.Unlock()
-	if ad == nil {
-		return errors.New("unsupported protocol")
-	}
-	if err := lease.setTarget(ad, p); err != nil {
-		return err
-	}
-	caps, e := ad.Discover(lease.ctx, p)
-	if e != nil {
-		return lease.result(errors.Join(e, ad.Close(lease.ctx, p)))
-	}
-	if _, e = a.cat.ReplaceProviderCapabilities(lease.ctx, p, caps); e != nil {
-		return lease.result(errors.Join(e, ad.Close(lease.ctx, p)))
-	}
-	a.mu.Lock()
-	if a.state == appOpen {
-		a.providers[p.ID] = p
-	}
-	a.mu.Unlock()
-	return nil
-}
-func (a *App) Grant(ctx context.Context, identity, capID string, permissions []string) error {
-	if strings.TrimSpace(identity) == "" {
-		return errors.New("identity must be non-empty")
-	}
-	if strings.TrimSpace(capID) == "" {
-		return errors.New("capability must be non-empty")
-	}
-	if len(permissions) == 0 {
-		return errors.New("at least one permission is required")
-	}
-	parsed := make([]authz.Permission, len(permissions))
-	for i, value := range permissions {
-		permission, err := authz.ParsePermission(value)
-		if err != nil {
-			return err
-		}
-		parsed[i] = permission
-	}
-	return a.az.GrantAll(ctx, identity, capID, parsed)
-}
-func (a *App) Search(ctx context.Context, identity string, q search.Query) ([]search.Result, error) {
-	a.mutation.Lock()
-	err := a.syncAttachedLocalSkills(ctx, identity)
-	a.mutation.Unlock()
+func (a *App) Search(ctx context.Context, identity, root string, q search.Query) ([]CapabilitySearchResult, error) {
+	canonical, err := canonicalWorkspaceRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	return a.search.Search(ctx, identity, q)
-}
-func (a *App) Project(ctx context.Context, identity, id, workspaceRoot, root string) error {
-	if !a.az.Allowed(ctx, identity, id, authz.Read) {
-		return errors.New("permission_denied")
-	}
-	c, e := a.cat.GetCapability(ctx, id)
-	if e != nil {
-		return e
-	}
-	s, e := generator.Render(c, false)
-	if e != nil {
-		return e
-	}
-	snapshot, e := mount.NewSnapshot(s.CapabilityID, s.Name, fmt.Sprintf("%d", s.Revision), s.Revision, s.Files)
-	if e != nil {
-		return e
-	}
-	if _, e = a.projections.Attach(ctx, workspaceRoot, workspace.PolicyAuto); e != nil {
-		return e
-	}
-	_, e = a.projections.Register(ctx, workspaceRoot, root, snapshot, "capability", id)
-	return e
-}
-
-type sink struct{ result json.RawMessage }
-
-func (*sink) Started() error { return nil }
-func (s *sink) Event(e provider.Event) error {
-	if e.Type == "result" {
-		s.result = append([]byte(nil), e.Data...)
-	}
-	return nil
-}
-func (s *sink) Artifact(string, string, []byte) error { return nil }
-func (a *App) Invoke(ctx context.Context, identity, id string, input json.RawMessage) (json.RawMessage, error) {
-	if len(input) > call.MaxPayloadBytes {
-		return nil, call.ErrPayloadTooLarge
-	}
-	lease, err := a.beginOperation(ctx)
+	q.WorkspaceRoot = canonical
+	results, err := a.search.Search(ctx, identity, q)
 	if err != nil {
 		return nil, err
 	}
-	defer lease.done()
-	a.mutation.RLock()
-	defer a.mutation.RUnlock()
-	if err := lease.check(); err != nil {
-		return nil, err
+	public := make([]CapabilitySearchResult, 0, len(results))
+	includeContracts := exactPublicRef(q.Text)
+	for _, result := range results {
+		public = append(public, publicSearchResult(result.Capability, includeContracts))
 	}
-	if !a.az.Allowed(lease.ctx, identity, id, authz.Invoke) {
-		if err := lease.check(); err != nil {
-			return nil, err
-		}
-		return nil, errors.New("permission_denied")
-	}
-	c, e := a.cat.GetCapability(lease.ctx, id)
-	if e != nil {
-		return nil, lease.result(e)
-	}
-	a.mu.Lock()
-	p, ok := a.providers[c.Source.Protocol+"/"+c.Source.Provider]
-	ad := a.adapters[p.Protocol]
-	state := a.state
-	if !ok || ad == nil || state != appOpen {
-		a.mu.Unlock()
-		if state != appOpen {
-			return nil, ErrAppClosed
-		}
-		return nil, errors.New("provider_unavailable")
-	}
-	lease.target = &providerSession{provider: p, adapter: ad}
-	a.mu.Unlock()
-	s := &sink{}
-	invocationID, e := call.NewID()
-	if e != nil {
-		return nil, e
-	}
-	if e = ad.Invoke(lease.ctx, p, c, invocationID, input, s); e != nil {
-		resultErr := lease.result(e)
-		if errors.Is(resultErr, ErrAppClosed) {
-			resultErr = errors.Join(resultErr, ad.Close(lease.ctx, p))
-		}
-		return nil, resultErr
-	}
-	if err := lease.check(); err != nil {
-		return nil, errors.Join(err, ad.Close(lease.ctx, p))
-	}
-	return s.result, nil
+	return public, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
