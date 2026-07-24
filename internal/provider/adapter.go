@@ -1,7 +1,7 @@
 // Package provider defines the Provider model and the Adapter interface that
-// each integration protocol implements to discover, invoke, cancel, health-
-// check, and close capabilities, along with the Sink, Event, and validated
-// AdapterError types used to stream results back to the runtime.
+// each integration protocol implements to discover, invoke, cancel,
+// health-check, and close capabilities, along with the Sink, Event, and
+// validated AdapterError types used to stream results back to the runtime.
 package provider
 
 import (
