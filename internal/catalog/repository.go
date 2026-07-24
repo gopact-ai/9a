@@ -1,3 +1,7 @@
+// Package catalog persists providers and their capabilities in SQLite,
+// maintaining a full-text search index and a monotonic catalog revision. It
+// resolves capability references within a workspace and reconciles the
+// capabilities of a provider on connect.
 package catalog
 
 import (

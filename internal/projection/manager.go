@@ -1,3 +1,7 @@
+// Package projection manages the projection of Skills into a workspace's
+// skills directory. It attaches workspaces, keeps the built-in Skill present
+// and up to date via the directory mount backend, and reports workspace and
+// managed-skill status.
 package projection
 
 import (

@@ -1,3 +1,6 @@
+// Package adapter validates local executables referenced by integrations,
+// ensuring a path is absolute, resolves through symlinks to a regular file,
+// and is executable before it is used to launch a subprocess.
 package adapter
 
 import (

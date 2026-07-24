@@ -1,3 +1,6 @@
+// Package a2a implements the provider adapter for remote A2A agents,
+// discovering an agent's skills as capabilities and invoking them over HTTP by
+// submitting tasks and polling for updates until they reach a terminal state.
 package a2a
 
 import (

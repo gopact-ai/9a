@@ -1,3 +1,6 @@
+// Package authz enforces access control by storing and checking
+// identity/capability grants in an ACL table, with read, invoke, and admin
+// permissions.
 package authz
 
 import (

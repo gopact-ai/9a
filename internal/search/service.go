@@ -1,3 +1,6 @@
+// Package search finds capabilities a caller may read within a workspace,
+// resolving exact and integration references and otherwise ranking results
+// with SQLite full-text search, filtered by ACL grants and workspace root.
 package search
 
 import (

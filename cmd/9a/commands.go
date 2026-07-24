@@ -1,3 +1,7 @@
+// Command 9a is the command-line entrypoint for NineA. It builds the cobra
+// command tree (connect, search, run, status, disconnect, doctor, secret, and
+// utilities) and forwards each invocation as a JSON request to the local
+// runtime over its unix-socket RPC.
 package main
 
 import (

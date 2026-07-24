@@ -1,3 +1,7 @@
+// Package app is the core runtime that ties the catalog, providers, search,
+// authentication, authorization, secrets, and workspace projections together.
+// It connects and disconnects integrations, discovers and runs their
+// capabilities, and manages provider sessions and their lifecycle.
 package app
 
 import (

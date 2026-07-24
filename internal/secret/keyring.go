@@ -1,3 +1,6 @@
+// Package secret stores and resolves integration credentials, with a backend
+// that keeps secret values in the operating system credential store via the
+// system keyring.
 package secret
 
 import (
