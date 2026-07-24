@@ -1,3 +1,6 @@
+// Package store defines the SQLite schema for the 9a runtime and initializes
+// it, creating the tables for providers, capabilities, ACLs, tokens, secrets,
+// workspaces, managed skills, and calls.
 package store
 
 import (

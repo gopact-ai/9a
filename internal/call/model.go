@@ -1,3 +1,6 @@
+// Package call models capability invocations as records with a state machine,
+// defining the allowed lifecycle states and transitions and validating call
+// identifiers and error metadata.
 package call
 
 import (

@@ -1,0 +1,40 @@
+# golangci-lint configuration (schema v2).
+# Pinned linter set: every linter here is expected to pass in CI, so a new
+# report means a real regression rather than noise. Extend deliberately.
+version: "2"
+
+linters:
+  # Start from the maintained default set (errcheck, govet, ineffassign,
+  # staticcheck, unused) and add checks that catch classes of bugs the
+  # defaults miss.
+  enable:
+    - bodyclose      # HTTP/response bodies must be closed
+    - copyloopvar    # loop-variable aliasing mistakes
+    - errorlint      # correct errors.Is/As and %w usage
+    - misspell       # common spelling mistakes in comments/strings
+    - nilerr         # returning nil where a non-nil error was checked
+    - unconvert      # redundant type conversions
+    - usestdlibvars  # prefer stdlib constants over magic strings
+  # Follow-up (each requires code changes, so kept out of the initial gate to
+  # keep it green and reviewable):
+  #   - gocyclo  # 9 functions above complexity 30 (max 50: Config.Validate).
+  #              # Enable with `settings.gocyclo.min-complexity: 30` after
+  #              # splitting them.
+  #   - unparam  # 3 always-constant params (exactArgs count, startCall
+  #              # identity, emitTaskUpdate status).
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Test helpers intentionally ignore some errors.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

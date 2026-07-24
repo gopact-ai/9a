@@ -1,3 +1,7 @@
+// Package mount defines the content-addressed snapshot model for projecting
+// Skills onto the filesystem. A Snapshot is an immutable, path-sanitized set
+// of files with a stable digest, and the package also defines attachment and
+// inspection types shared by mount backends.
 package mount
 
 import (

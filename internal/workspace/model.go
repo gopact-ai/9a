@@ -1,3 +1,6 @@
+// Package workspace defines the workspace and managed-skill models, including
+// backend policy, backend, and state enumerations, and derives a stable
+// workspace ID from its root path.
 package workspace
 
 import (

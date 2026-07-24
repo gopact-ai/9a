@@ -1,3 +1,6 @@
+// Package jsonvalue decodes a single JSON value while preserving numbers as
+// json.Number rather than converting them to float64, and rejects trailing
+// data after the value.
 package jsonvalue
 
 import (

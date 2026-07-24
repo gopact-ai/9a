@@ -1,3 +1,7 @@
+// Package declarative implements the provider adapter for YAML-defined "api"
+// integrations, discovering operations and workflows as capabilities and
+// invoking them by making HTTP requests with templated headers, credential
+// resolution, and hooks.
 package declarative
 
 import (

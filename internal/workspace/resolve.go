@@ -59,7 +59,9 @@ func Resolve(explicit, cwd string) (string, error) {
 	command := exec.Command("git", "-C", canonical, "rev-parse", "--show-toplevel")
 	output, gitErr := command.Output()
 	if gitErr != nil {
-		return filepath.Clean(canonical), nil
+		// Not a git repository (or git unavailable): fall back to the resolved
+		// directory instead of failing workspace resolution.
+		return filepath.Clean(canonical), nil //nolint:nilerr // absence of git falls back to the resolved directory
 	}
 	root := strings.TrimSpace(string(output))
 	root, err = filepath.EvalSymlinks(root)

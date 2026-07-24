@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/gopact-ai/9a/internal/authn"
@@ -23,7 +24,7 @@ func TestBootstrapRollsBackTokenWhenAdminGrantFails(t *testing.T) {
 	if err := a.Bootstrap(ctx, "secret"); err == nil {
 		t.Fatal("bootstrap unexpectedly passed")
 	}
-	if _, err := authn.New(db).Authenticate(ctx, "secret"); err != authn.ErrInvalidToken {
+	if _, err := authn.New(db).Authenticate(ctx, "secret"); !errors.Is(err, authn.ErrInvalidToken) {
 		t.Fatalf("token survived rollback: %v", err)
 	}
 }

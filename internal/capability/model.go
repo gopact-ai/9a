@@ -1,3 +1,7 @@
+// Package capability defines the capability model shared across the system:
+// its identity, source, input/output contracts, lifecycle, and security
+// metadata, along with helpers to slugify names and derive stable IDs and
+// public references.
 package capability
 
 import (

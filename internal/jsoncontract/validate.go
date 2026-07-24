@@ -1,3 +1,6 @@
+// Package jsoncontract compiles and validates JSON Schema definitions used as
+// capability input and output contracts. It bounds schema size and rejects
+// external $ref references so only self-contained schemas are accepted.
 package jsoncontract
 
 import (
@@ -29,10 +32,10 @@ func Validate(definition map[string]any, value json.RawMessage) error {
 	}
 	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(value))
 	if err != nil {
-		return fmt.Errorf("%w: decode json value: %v", ErrInvalidValue, err)
+		return fmt.Errorf("%w: decode json value: %w", ErrInvalidValue, err)
 	}
 	if err := schema.Validate(instance); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidValue, err)
+		return fmt.Errorf("%w: %w", ErrInvalidValue, err)
 	}
 	return nil
 }
@@ -42,26 +45,26 @@ func compile(definition map[string]any) (*jsonschema.Schema, error) {
 		definition = map[string]any{}
 	}
 	if err := rejectExternalReferences(definition); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidSchema, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSchema, err)
 	}
 	raw, err := json.Marshal(definition)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode: %v", ErrInvalidSchema, err)
+		return nil, fmt.Errorf("%w: encode: %w", ErrInvalidSchema, err)
 	}
 	if len(raw) > MaxSchemaBytes {
 		return nil, fmt.Errorf("%w: exceeds %d bytes", ErrInvalidSchema, MaxSchemaBytes)
 	}
 	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("%w: decode: %v", ErrInvalidSchema, err)
+		return nil, fmt.Errorf("%w: decode: %w", ErrInvalidSchema, err)
 	}
 	compiler := jsonschema.NewCompiler()
 	if err := compiler.AddResource("schema.json", document); err != nil {
-		return nil, fmt.Errorf("%w: add resource: %v", ErrInvalidSchema, err)
+		return nil, fmt.Errorf("%w: add resource: %w", ErrInvalidSchema, err)
 	}
 	compiled, err := compiler.Compile("schema.json")
 	if err != nil {
-		return nil, fmt.Errorf("%w: compile: %v", ErrInvalidSchema, err)
+		return nil, fmt.Errorf("%w: compile: %w", ErrInvalidSchema, err)
 	}
 	return compiled, nil
 }

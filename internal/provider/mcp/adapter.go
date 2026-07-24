@@ -1,3 +1,6 @@
+// Package mcp implements the provider adapter for local MCP servers, launching
+// a server executable as a subprocess and exchanging JSON-RPC over stdio to
+// discover its tools as capabilities and invoke them.
 package mcp
 
 import (

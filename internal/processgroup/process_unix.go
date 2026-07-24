@@ -1,5 +1,8 @@
 //go:build aix || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
 
+// Package processgroup starts child processes in their own process group and
+// kills the whole group, so that a subprocess and any children it spawns are
+// terminated together.
 package processgroup
 
 import (

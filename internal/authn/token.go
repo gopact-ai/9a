@@ -1,3 +1,5 @@
+// Package authn issues and verifies bearer tokens, mapping a token to an
+// identity by looking up its SHA-256 digest in the token store.
 package authn
 
 import (

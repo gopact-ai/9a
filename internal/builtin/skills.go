@@ -1,3 +1,6 @@
+// Package builtin embeds the built-in "using-ninea" Agent Skill and its
+// authoring guides, exposing them as mount snapshots so a fresh workspace has
+// a bootstrap path before other Skills are projected.
 package builtin
 
 import (
