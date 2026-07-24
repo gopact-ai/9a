@@ -30,6 +30,8 @@ jobs:
         run: go version | grep -F 'go1.25.12'
       - name: Check formatting and vet
         run: make check
+      - name: Run linters
+        run: make lint
       - name: Run unit tests
         run: make test
       - name: Run race detector

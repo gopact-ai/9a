@@ -1,3 +1,7 @@
+// Package dir is a mount backend that projects a snapshot into an owned
+// directory on disk. It writes files atomically via a staging directory,
+// records an ownership manifest, and can inspect a target to detect whether it
+// is missing, tampered, or healthy.
 package dir
 
 import (
@@ -212,7 +216,9 @@ func (b *Backend) Inspect(ctx context.Context, a mount.Attachment, s mount.Snaps
 		return mount.Inspection{State: mount.InspectionMissing, Reason: "target missing"}, nil
 	}
 	if err != nil || !sameIdentity(m, a) {
-		return mount.Inspection{State: mount.InspectionTampered, Reason: "invalid ownership manifest"}, nil
+		// Any manifest read or identity error means the mount cannot be trusted;
+		// report it as tampered rather than propagating the raw error.
+		return mount.Inspection{State: mount.InspectionTampered, Reason: "invalid ownership manifest"}, nil //nolint:nilerr // untrusted mount is reported as tampered
 	}
 	want := expectedManifest(a.WorkspaceID, s)
 	if m.Digest != want.Digest || len(m.Files) != len(want.Files) {
@@ -253,13 +259,15 @@ func (b *Backend) Inspect(ctx context.Context, a mount.Attachment, s mount.Snaps
 		}
 		return nil
 	}); walkErr != nil {
-		return mount.Inspection{State: mount.InspectionTampered, Reason: walkErr.Error()}, nil
+		// A walk failure means the tree diverged from the manifest; surface it
+		// as tampering with the reason, not as a backend error.
+		return mount.Inspection{State: mount.InspectionTampered, Reason: walkErr.Error()}, nil //nolint:nilerr // divergent tree is reported as tampered
 	}
 	for _, f := range want.Files {
 		path := filepath.Join(a.Target, filepath.FromSlash(f.Path))
 		info, e := os.Stat(path)
 		if e != nil || uint32(info.Mode().Perm()) != f.Mode || int(info.Size()) != f.Size {
-			return mount.Inspection{State: mount.InspectionTampered, Reason: "file metadata differs"}, nil
+			return mount.Inspection{State: mount.InspectionTampered, Reason: "file metadata differs"}, nil //nolint:nilerr // stat failure or metadata drift is reported as tampered
 		}
 		data, e := os.ReadFile(path)
 		if e != nil {

@@ -139,7 +139,7 @@ func Parse(source []byte) (*Config, error) {
 		return nil, err
 	}
 	var extra yaml.Node
-	if err := decoder.Decode(&extra); err != io.EOF {
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return nil, errors.New("source must contain exactly one YAML document")
 		}

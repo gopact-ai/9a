@@ -285,7 +285,6 @@ func TestDiscoveryBudgetRejectsAggregateAbuse(t *testing.T) {
 		cursor       string
 	}{{1, 1, "a"}, {1, 1, "b"}, {1, 1, "a"}}}}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var b discoveryBudget
 			var err error

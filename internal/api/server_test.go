@@ -33,7 +33,6 @@ func TestDecodeRequestIsStrict(t *testing.T) {
 		{name: "null", body: `null`, err: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := decodeRequest(strings.NewReader(test.body))
@@ -88,10 +87,9 @@ func TestUnknownTokenCannotUseRuntimeActions(t *testing.T) {
 		{Action: "secret.unset", Name: "weather.token", Root: t.TempDir()},
 	}
 	for _, bodyRequest := range requests {
-		bodyRequest := bodyRequest
 		t.Run(bodyRequest.Action, func(t *testing.T) {
 			body, _ := json.Marshal(bodyRequest)
-			req, _ := http.NewRequest("POST", "http://unix/rpc", bytes.NewReader(body))
+			req, _ := http.NewRequest(http.MethodPost, "http://unix/rpc", bytes.NewReader(body))
 			req.Header.Set("Authorization", "Bearer unknown-token")
 			resp, err := (&http.Client{Transport: tr}).Do(req)
 			if err != nil {

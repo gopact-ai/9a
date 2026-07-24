@@ -142,7 +142,6 @@ func TestOpenRejectsIncompatibleNonemptyDatabaseWithoutMigration(t *testing.T) {
 		{name: "unversioned", version: 0},
 		{name: "unknown version", version: 2},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()

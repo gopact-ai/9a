@@ -1,3 +1,7 @@
+// Package api serves the 9a runtime over a Unix-domain socket, decoding
+// authenticated JSON requests and dispatching them to the app layer for
+// actions such as status, doctor, connect, search, run, and secret
+// management. It maps application errors to structured JSON responses.
 package api
 
 import (
@@ -70,7 +74,7 @@ func Listen(socket string, a *app.App) (*Server, error) {
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		identity, authErr := a.Authenticate(r.Context(), got)
 		if authErr != nil {
-			w.WriteHeader(401)
+			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(Response{Error: "authentication failed", Code: "unauthorized"})
 			return
 		}

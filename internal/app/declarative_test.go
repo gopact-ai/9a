@@ -388,7 +388,6 @@ func TestConcurrentDeclarativeUpdatesStayConsistent(t *testing.T) {
 	var wait sync.WaitGroup
 	errorsOut := make(chan error, len(sources))
 	for _, source := range sources {
-		source := source
 		wait.Add(1)
 		go func() {
 			defer wait.Done()

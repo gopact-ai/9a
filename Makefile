@@ -1,7 +1,8 @@
 GO ?= go
+GOLANGCI_LINT_VERSION ?= v2.12.2
 GO_PACKAGES ?= ./...
 
-.PHONY: check test test-e2e build docs-check docs-check-changed test-docs-check test-release-check
+.PHONY: check lint test test-e2e build docs-check docs-check-changed test-docs-check test-release-check
 
 check:
 	@unformatted="$$(gofmt -l .)"; \
@@ -10,6 +11,9 @@ check:
 		exit 1; \
 	fi
 	$(GO) vet $(GO_PACKAGES)
+
+lint:
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run $(GO_PACKAGES)
 
 test:
 	@packages="$$( $(GO) list $(GO_PACKAGES) | grep -v '/test/e2e$$')" && \
